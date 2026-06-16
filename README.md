@@ -8,6 +8,12 @@ Fonte principal:
 https://dadosabertos.camara.leg.br/api/v2/
 ```
 
+Documentação Swagger:
+
+```text
+https://dadosabertos.camara.leg.br/swagger/api.html
+```
+
 ## Stack
 
 - C# / .NET 8
@@ -79,6 +85,45 @@ O arquivo `.vscode/mcp.json` registra o servidor MCP:
   }
 }
 ```
+
+Depois de salvar o arquivo, reinicie o servidor MCP pelo VS Code caso ele já esteja aberto.
+
+## Abrir o chat do VS Code com suporte MCP
+
+No VS Code, o suporte a MCP fica disponível pelo GitHub Copilot Chat em **Agent Mode**.
+
+Passos:
+
+1. Abra este repositório no VS Code.
+2. Abra o chat:
+   - `Ctrl + Alt + I`; ou
+   - `Ctrl + Shift + P` e execute **Chat: Open Chat**.
+3. No painel do chat, selecione o modo **Agent**.
+4. Verifique se o servidor MCP foi carregado:
+   - `Ctrl + Shift + P`;
+   - execute **MCP: List Servers** ou **MCP: Show Installed Servers**.
+5. Se o servidor `brazil-politicians` aparecer parado, execute **MCP: Start Server**.
+6. No chat, peça para o agente usar as ferramentas MCP do workspace.
+
+Exemplos de prompt:
+
+```text
+Use o MCP para consultar deputados pela API de dados abertos da Câmara.
+```
+
+```text
+Use as ferramentas MCP deste workspace para listar deputados do Rio Grande do Sul.
+```
+
+```text
+Use o MCP brazil-politicians para procurar proposições de 2026 sobre inteligência artificial.
+```
+
+Observações:
+
+- O chat precisa estar em **Agent Mode** para conseguir usar ferramentas MCP.
+- Se o servidor MCP não aparecer na lista, verifique o arquivo `.vscode/mcp.json` e reinicie o VS Code.
+- Se o comando `dotnet run` falhar, teste o comando manualmente no terminal para validar o caminho do projeto e o SDK instalado.
 
 ## Configuração opcional
 
