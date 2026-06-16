@@ -14,6 +14,7 @@ https://dadosabertos.camara.leg.br/api/v2/
 - MCP C# SDK (`ModelContextProtocol`)
 - Transporte MCP via `stdio`
 - API REST da Câmara dos Deputados
+- Cache local SQLite para respostas da API da Câmara
 
 ## Ferramentas MCP expostas
 
@@ -86,7 +87,27 @@ O cliente da Câmara pode ser configurado por variáveis de ambiente:
 ```bash
 CAMARA_API_BASE_URL=https://dadosabertos.camara.leg.br/api/v2/
 CAMARA_API_TIMEOUT_SECONDS=30
+CAMARA_API_CACHE_SQLITE_PATH=/caminho/para/camara-api-cache.sqlite
 ```
+
+Quando `CAMARA_API_CACHE_SQLITE_PATH` não é definido, o cache é salvo em:
+
+```text
+<diretorio-da-aplicacao>/cache/camara-api-cache.sqlite
+```
+
+## Cache da API da Câmara
+
+Todas as chamadas HTTP GET feitas pelo `CamaraApiClient` usam cache local em SQLite com validade de 1 hora.
+
+Fluxo:
+
+1. Monta a URL relativa da API da Câmara.
+2. Procura uma resposta válida na tabela `ApiResponseCache`.
+3. Se existir e ainda não expirou, retorna o JSON salvo.
+4. Se não existir, chama a API da Câmara.
+5. Se a resposta HTTP for 2xx, formata o JSON e salva no SQLite por 1 hora.
+6. Respostas de erro não são cacheadas.
 
 ## Exemplos de prompts em um cliente MCP
 
