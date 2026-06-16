@@ -1,19 +1,41 @@
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 
-var builder = Host.CreateApplicationBuilder(args);
+var builder = WebApplication.CreateBuilder(args);
 
-builder.Logging.AddConsole(options =>
+builder.Services.AddCors(options =>
 {
-    // MCP over stdio reserves stdout for JSON-RPC messages.
-    // Logs must go to stderr to avoid breaking the protocol.
-    options.LogToStandardErrorThreshold = LogLevel.Trace;
+    options.AddPolicy("McpCors", policy =>
+    {
+        policy
+            .AllowAnyOrigin()
+            .AllowAnyMethod()
+            .AllowAnyHeader()
+            .WithExposedHeaders("Mcp-Session-Id");
+    });
 });
 
 builder.Services
     .AddMcpServer()
-    .WithStdioServerTransport()
+    .WithHttpTransport()
     .WithToolsFromAssembly();
 
-await builder.Build().RunAsync();
+var app = builder.Build();
+
+app.UseCors("McpCors");
+app.UseDefaultFiles();
+app.UseStaticFiles();
+
+app.MapGet("/health", () => Results.Ok(new
+{
+    status = "ok",
+    transport = "streamable-http",
+    mcpEndpoint = "/mcp",
+    clientPage = "/"
+}));
+
+app.MapMcp("/mcp");
+
+await app.RunAsync();
