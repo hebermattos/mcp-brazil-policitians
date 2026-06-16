@@ -17,10 +17,19 @@ https://dadosabertos.camara.leg.br/swagger/api.html
 ## Stack
 
 - C# / .NET 8
+- ASP.NET Core Minimal API
 - MCP C# SDK (`ModelContextProtocol`)
-- Transporte MCP via `stdio`
+- Transporte MCP via Streamable HTTP
 - API REST da Câmara dos Deputados
 - Cache local SQLite para respostas da API da Câmara
+
+## Endpoints locais
+
+| Endpoint | Descrição |
+| --- | --- |
+| `/` | Página HTML simples para testar o MCP pelo navegador. |
+| `/mcp` | Endpoint MCP via Streamable HTTP. |
+| `/health` | Health check simples do servidor. |
 
 ## Ferramentas MCP expostas
 
@@ -68,62 +77,45 @@ dotnet restore
 dotnet run --project McpBrazilPoliticians.csproj
 ```
 
-Como o servidor usa transporte `stdio`, ele aguarda mensagens JSON-RPC MCP no stdin/stdout. Os logs são enviados para stderr para não quebrar o protocolo.
+Por padrão, o ASP.NET Core sobe nos endereços configurados pelo ambiente. Para fixar uma porta local:
 
-## Configuração no VS Code
-
-O arquivo `.vscode/mcp.json` registra o servidor MCP:
-
-```json
-{
-  "servers": {
-    "brazil-politicians": {
-      "type": "stdio",
-      "command": "dotnet",
-      "args": ["run", "--project", "${workspaceFolder}/McpBrazilPoliticians.csproj"]
-    }
-  }
-}
+```bash
+dotnet run --project McpBrazilPoliticians.csproj --urls http://localhost:5000
 ```
 
-Depois de salvar o arquivo, reinicie o servidor MCP pelo VS Code caso ele já esteja aberto.
-
-## Abrir o chat do VS Code com suporte MCP
-
-No VS Code, o suporte a MCP fica disponível pelo GitHub Copilot Chat em **Agent Mode**.
-
-Passos:
-
-1. Abra este repositório no VS Code.
-2. Abra o chat:
-   - `Ctrl + Alt + I`; ou
-   - `Ctrl + Shift + P` e execute **Chat: Open Chat**.
-3. No painel do chat, selecione o modo **Agent**.
-4. Verifique se o servidor MCP foi carregado:
-   - `Ctrl + Shift + P`;
-   - execute **MCP: List Servers** ou **MCP: Show Installed Servers**.
-5. Se o servidor `brazil-politicians` aparecer parado, execute **MCP: Start Server**.
-6. No chat, peça para o agente usar as ferramentas MCP do workspace.
-
-Exemplos de prompt:
+Depois acesse:
 
 ```text
-Use o MCP para consultar deputados pela API de dados abertos da Câmara.
+http://localhost:5000/
 ```
+
+O endpoint MCP fica em:
 
 ```text
-Use as ferramentas MCP deste workspace para listar deputados do Rio Grande do Sul.
+http://localhost:5000/mcp
 ```
+
+## Usando a página HTML
+
+A página inicial permite:
+
+1. Inicializar a sessão MCP.
+2. Listar ferramentas disponíveis com `tools/list`.
+3. Selecionar uma ferramenta.
+4. Enviar argumentos JSON.
+5. Executar a ferramenta com `tools/call`.
+
+O campo de endpoint vem preenchido com `/mcp`, que funciona quando a página é servida pelo próprio servidor.
+
+## Configuração em clientes MCP HTTP
+
+Use o endpoint HTTP do servidor:
 
 ```text
-Use o MCP brazil-politicians para procurar proposições de 2026 sobre inteligência artificial.
+http://localhost:5000/mcp
 ```
 
-Observações:
-
-- O chat precisa estar em **Agent Mode** para conseguir usar ferramentas MCP.
-- Se o servidor MCP não aparecer na lista, verifique o arquivo `.vscode/mcp.json` e reinicie o VS Code.
-- Se o comando `dotnet run` falhar, teste o comando manualmente no terminal para validar o caminho do projeto e o SDK instalado.
+O transporte é Streamable HTTP. Clientes MCP compatíveis devem chamar esse endpoint usando JSON-RPC MCP sobre HTTP.
 
 ## Configuração opcional
 
@@ -168,3 +160,4 @@ Fluxo:
 - URLs absolutas são bloqueadas para evitar SSRF.
 - `..` no path é bloqueado para evitar path traversal.
 - Recomenda-se limitar `itens` em chamadas feitas por LLMs para evitar respostas muito grandes.
+- A política de CORS atual é permissiva para facilitar testes locais. Restrinja as origens antes de expor em rede pública.
