@@ -1,0 +1,13 @@
+{
+  "servers": {
+    "brazil-politicians": {
+      "type": "stdio",
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "${workspaceFolder}/McpBrazilPoliticians.csproj"
+      ]
+    }
+  }
+}
