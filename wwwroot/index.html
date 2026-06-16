@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>MCP Brazil Politicians</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f6f8;
+      --card: #ffffff;
+      --text: #111827;
+      --muted: #4b5563;
+      --border: #d1d5db;
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --secondary: #4b5563;
+      --secondary-hover: #374151;
+      --code-bg: #0f172a;
+      --code-text: #e5e7eb;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Arial, Helvetica, sans-serif;
+    }
+
+    header {
+      background: #1f2937;
+      color: #fff;
+      padding: 18px 24px;
+    }
+
+    header h1 {
+      margin: 0 0 4px;
+      font-size: 24px;
+    }
+
+    header p {
+      margin: 0;
+      color: #d1d5db;
+    }
+
+    main {
+      max-width: 1180px;
+      margin: 24px auto;
+      padding: 0 16px;
+    }
+
+    section {
+      background: var(--card);
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 16px;
+      box-shadow: 0 1px 5px rgba(0, 0, 0, 0.08);
+    }
+
+    h2 {
+      margin-top: 0;
+      font-size: 20px;
+    }
+
+    label {
+      display: block;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+
+    input,
+    textarea,
+    button {
+      font: inherit;
+    }
+
+    input,
+    textarea {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 12px;
+    }
+
+    textarea {
+      min-height: 160px;
+      font-family: Consolas, Monaco, monospace;
+      resize: vertical;
+    }
+
+    button {
+      border: 0;
+      border-radius: 8px;
+      padding: 10px 14px;
+      background: var(--primary);
+      color: #fff;
+      cursor: pointer;
+      margin: 0 8px 8px 0;
+    }
+
+    button:hover {
+      background: var(--primary-hover);
+    }
+
+    button.secondary {
+      background: var(--secondary);
+    }
+
+    button.secondary:hover {
+      background: var(--secondary-hover);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    .status {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .tool-card {
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 8px;
+      cursor: pointer;
+    }
+
+    .tool-card:hover {
+      background: #f9fafb;
+    }
+
+    .tool-name {
+      font-weight: 700;
+    }
+
+    .tool-description {
+      color: var(--muted);
+      margin-top: 4px;
+      font-size: 14px;
+    }
+
+    pre {
+      min-height: 220px;
+      margin: 0;
+      background: var(--code-bg);
+      color: var(--code-text);
+      border-radius: 8px;
+      padding: 16px;
+      overflow: auto;
+      white-space: pre-wrap;
+    }
+
+    @media (max-width: 800px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>MCP Brazil Politicians</h1>
+    <p>Cliente HTML para listar e executar ferramentas do servidor MCP via Streamable HTTP.</p>
+  </header>
+
+  <main>
+    <section>
+      <h2>Configuração</h2>
+
+      <label for="endpoint">Endpoint MCP HTTP</label>
+      <input id="endpoint" type="text" value="/mcp" />
+
+      <button type="button" onclick="initializeMcp()">Inicializar</button>
+      <button type="button" onclick="listTools()">Listar ferramentas</button>
+      <button type="button" class="secondary" onclick="clearOutput()">Limpar saída</button>
+
+      <div id="status" class="status">Status: aguardando inicialização.</div>
+    </section>
+
+    <div class="grid">
+      <section>
+        <h2>Ferramentas disponíveis</h2>
+        <div id="toolsList">Nenhuma ferramenta carregada.</div>
+      </section>
+
+      <section>
+        <h2>Chamar ferramenta</h2>
+
+        <label for="toolName">Nome da ferramenta</label>
+        <input id="toolName" type="text" placeholder="Ex: SearchDeputadosAsync" />
+
+        <label for="toolArgs">Argumentos JSON</label>
+        <textarea id="toolArgs">{
+  "nome": "Maria",
+  "siglaUf": "RS",
+  "pagina": 1,
+  "itens": 10
+}</textarea>
+
+        <button type="button" onclick="callTool()">Executar ferramenta</button>
+      </section>
+    </div>
+
+    <section>
+      <h2>Resposta</h2>
+      <pre id="output"></pre>
+    </section>
+  </main>
+
+  <script>
+    let nextId = 1;
+    let initialized = false;
+    let mcpSessionId = null;
+
+    function getEndpoint() {
+      return document.getElementById("endpoint").value.trim() || "/mcp";
+    }
+
+    function setStatus(message) {
+      document.getElementById("status").innerText = "Status: " + message;
+    }
+
+    function writeOutput(value) {
+      document.getElementById("output").textContent = typeof value === "string"
+        ? value
+        : JSON.stringify(value, null, 2);
+    }
+
+    function clearOutput() {
+      writeOutput("");
+    }
+
+    async function sendJsonRpc(method, params) {
+      return sendPayload({
+        jsonrpc: "2.0",
+        id: nextId++,
+        method,
+        params
+      });
+    }
+
+    async function sendJsonRpcNotification(method, params) {
+      return sendPayload({
+        jsonrpc: "2.0",
+        method,
+        params
+      });
+    }
+
+    async function sendPayload(payload) {
+      const headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream"
+      };
+
+      if (mcpSessionId) {
+        headers["Mcp-Session-Id"] = mcpSessionId;
+      }
+
+      const response = await fetch(getEndpoint(), {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload)
+      });
+
+      const sessionHeader = response.headers.get("Mcp-Session-Id");
+      if (sessionHeader) {
+        mcpSessionId = sessionHeader;
+      }
+
+      const rawText = await response.text();
+
+      if (!response.ok) {
+        throw new Error("HTTP " + response.status + ": " + rawText);
+      }
+
+      if (!rawText) {
+        return null;
+      }
+
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType.includes("text/event-stream")) {
+        return parseServerSentEvents(rawText);
+      }
+
+      try {
+        return JSON.parse(rawText);
+      } catch {
+        return rawText;
+      }
+    }
+
+    function parseServerSentEvents(rawText) {
+      const dataLines = rawText
+        .split(/\r?\n/)
+        .filter(line => line.startsWith("data:"))
+        .map(line => line.substring(5).trim())
+        .filter(Boolean);
+
+      if (dataLines.length === 0) {
+        return rawText;
+      }
+
+      const lastData = dataLines[dataLines.length - 1];
+
+      try {
+        return JSON.parse(lastData);
+      } catch {
+        return lastData;
+      }
+    }
+
+    async function initializeMcp() {
+      try {
+        setStatus("inicializando...");
+
+        const result = await sendJsonRpc("initialize", {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: {
+            name: "mcp-brazil-politicians-html-client",
+            version: "1.0.0"
+          }
+        });
+
+        await sendJsonRpcNotification("notifications/initialized", {});
+
+        initialized = true;
+        setStatus("inicializado" + (mcpSessionId ? " com sessão HTTP." : "."));
+        writeOutput(result);
+      } catch (error) {
+        initialized = false;
+        setStatus("erro ao inicializar.");
+        writeOutput({ error: error.message });
+      }
+    }
+
+    async function listTools() {
+      try {
+        if (!initialized) {
+          await initializeMcp();
+        }
+
+        setStatus("listando ferramentas...");
+
+        const result = await sendJsonRpc("tools/list", {});
+        renderTools(result);
+
+        setStatus("ferramentas carregadas.");
+        writeOutput(result);
+      } catch (error) {
+        setStatus("erro ao listar ferramentas.");
+        writeOutput({ error: error.message });
+      }
+    }
+
+    function renderTools(response) {
+      const container = document.getElementById("toolsList");
+      container.innerHTML = "";
+
+      const tools = response?.result?.tools || [];
+
+      if (tools.length === 0) {
+        container.innerText = "Nenhuma ferramenta retornada pelo servidor.";
+        return;
+      }
+
+      for (const tool of tools) {
+        const card = document.createElement("div");
+        card.className = "tool-card";
+
+        const name = document.createElement("div");
+        name.className = "tool-name";
+        name.innerText = tool.name;
+
+        const description = document.createElement("div");
+        description.className = "tool-description";
+        description.innerText = tool.description || "Sem descrição.";
+
+        card.appendChild(name);
+        card.appendChild(description);
+
+        card.onclick = () => {
+          document.getElementById("toolName").value = tool.name;
+          document.getElementById("toolArgs").value = JSON.stringify(buildExampleArgs(tool.inputSchema), null, 2);
+        };
+
+        container.appendChild(card);
+      }
+    }
+
+    function buildExampleArgs(schema) {
+      if (!schema?.properties) {
+        return {};
+      }
+
+      const result = {};
+      for (const [name, propertySchema] of Object.entries(schema.properties)) {
+        result[name] = getExampleValue(propertySchema);
+      }
+
+      return result;
+    }
+
+    function getExampleValue(schema) {
+      if (schema.default !== undefined) return schema.default;
+      if (schema.example !== undefined) return schema.example;
+
+      switch (schema.type) {
+        case "string": return "";
+        case "integer": return 0;
+        case "number": return 0;
+        case "boolean": return false;
+        case "array": return [];
+        case "object": return {};
+        default: return null;
+      }
+    }
+
+    async function callTool() {
+      try {
+        if (!initialized) {
+          await initializeMcp();
+        }
+
+        const toolName = document.getElementById("toolName").value.trim();
+        const argsText = document.getElementById("toolArgs").value.trim();
+
+        if (!toolName) {
+          throw new Error("Informe o nome da ferramenta.");
+        }
+
+        let args = {};
+        if (argsText) {
+          try {
+            args = JSON.parse(argsText);
+          } catch {
+            throw new Error("Os argumentos precisam ser um JSON válido.");
+          }
+        }
+
+        setStatus("executando ferramenta...");
+
+        const result = await sendJsonRpc("tools/call", {
+          name: toolName,
+          arguments: args
+        });
+
+        setStatus("ferramenta executada.");
+        writeOutput(result);
+      } catch (error) {
+        setStatus("erro ao executar ferramenta.");
+        writeOutput({ error: error.message });
+      }
+    }
+  </script>
+</body>
+</html>
