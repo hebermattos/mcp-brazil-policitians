@@ -7,10 +7,18 @@ namespace McpBrazilPoliticians.Services;
 
 public sealed class OpenAiChatService
 {
+    private const string DefaultChatProvider = "ollama";
+    private const string DefaultOpenAiBaseUrl = "https://api.openai.com/v1/";
     private const string DefaultOpenAiModel = "gpt-4.1-mini";
+    private const int DefaultOpenAiTimeoutSeconds = 60;
     private const string DefaultOllamaModel = "llama3.1:8b";
     private const string DefaultOllamaBaseUrl = "http://localhost:11434";
+    private const int DefaultOllamaTimeoutSeconds = 120;
     private const string DefaultCamaraBaseUrl = "https://dadosabertos.camara.leg.br/api/v2/";
+    private const int DefaultCamaraTimeoutSeconds = 30;
+    private const int DefaultSearchItems = 10;
+    private const int DefaultSearchPage = 1;
+    private const int DefaultMaxDataJsonChars = 20_000;
 
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IConfiguration _configuration;
@@ -44,7 +52,10 @@ public sealed class OpenAiChatService
 
     private async Task<ToolPlan> CreateToolPlanAsync(string prompt, CancellationToken cancellationToken)
     {
-        var systemPrompt = """
+        var defaultItems = GetIntSetting("Chat:DefaultSearchItems", "CHAT_DEFAULT_SEARCH_ITEMS", DefaultSearchItems, minValue: 1, maxValue: 100);
+        var defaultPage = GetIntSetting("Chat:DefaultSearchPage", "CHAT_DEFAULT_SEARCH_PAGE", DefaultSearchPage, minValue: 1, maxValue: 10_000);
+
+        var systemPrompt = $"""
 Você é um planejador de ferramentas para um sistema que consulta a API de Dados Abertos da Câmara dos Deputados.
 Responda exclusivamente com JSON válido, sem markdown.
 
@@ -59,20 +70,21 @@ Escolha uma ferramenta:
 Regras:
 - Para perguntas sobre projetos de lei, PEC, MP, proposições, assuntos legislativos ou temas como escala 6x1, use search_proposicoes.
 - Para perguntas sobre deputados/parlamentares, use search_deputados, exceto quando houver id e o usuário pedir detalhes.
-- Use itens no máximo 10.
+- Use itens no máximo {defaultItems}.
+- Use pagina {defaultPage} quando o usuário não informar página.
 - Quando o usuário informar UF, use siglaUf com duas letras maiúsculas.
 - Quando o usuário informar ano, use ano numérico.
 - Quando buscar por assunto de proposição, coloque o assunto principal em ementa.
 
 Formato obrigatório:
-{
+{{
   "tool": "search_proposicoes",
-  "arguments": {
+  "arguments": {{
     "ementa": "escala 6x1",
-    "itens": 10,
-    "pagina": 1
-  }
-}
+    "itens": {defaultItems},
+    "pagina": {defaultPage}
+  }}
+}}
 """;
 
         var content = await CallChatModelAsync(systemPrompt, prompt, forceJson: true, cancellationToken);
@@ -102,14 +114,10 @@ Formato obrigatório:
                 }
             }
 
-            if (!arguments.ContainsKey("itens") && tool.StartsWith("search_", StringComparison.OrdinalIgnoreCase))
+            if (tool.StartsWith("search_", StringComparison.OrdinalIgnoreCase))
             {
-                arguments["itens"] = "10";
-            }
-
-            if (!arguments.ContainsKey("pagina") && tool.StartsWith("search_", StringComparison.OrdinalIgnoreCase))
-            {
-                arguments["pagina"] = "1";
+                arguments.TryAdd("itens", defaultItems.ToString());
+                arguments.TryAdd("pagina", defaultPage.ToString());
             }
 
             return new ToolPlan(tool, arguments);
@@ -124,14 +132,15 @@ Formato obrigatório:
     private async Task<JsonDocument> ExecuteCamaraToolAsync(ToolPlan plan, CancellationToken cancellationToken)
     {
         var (path, query) = BuildCamaraRequest(plan);
-        var baseUrl = GetConfigurationValue("CAMARA_API_BASE_URL", "CamaraApi:BaseUrl") ?? DefaultCamaraBaseUrl;
+        var baseUrl = GetStringSetting("CamaraApi:BaseUrl", "CAMARA_API_BASE_URL", DefaultCamaraBaseUrl);
+        var timeoutSeconds = GetIntSetting("CamaraApi:TimeoutSeconds", "CAMARA_API_TIMEOUT_SECONDS", DefaultCamaraTimeoutSeconds, minValue: 1, maxValue: 300);
         var requestUri = BuildUri(baseUrl, path, query);
 
         using var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
         var httpClient = _httpClientFactory.CreateClient();
-        using var response = await httpClient.SendAsync(request, cancellationToken);
+        using var response = await SendAsyncWithTimeout(httpClient, request, timeoutSeconds, cancellationToken);
         var responseText = await response.Content.ReadAsStringAsync(cancellationToken);
 
         if (!response.IsSuccessStatusCode)
@@ -173,10 +182,12 @@ Formato obrigatório:
         JsonDocument data,
         CancellationToken cancellationToken)
     {
+        var maxDataJsonChars = GetIntSetting("Chat:MaxDataJsonChars", "CHAT_MAX_DATA_JSON_CHARS", DefaultMaxDataJsonChars, minValue: 1_000, maxValue: 500_000);
         var dataJson = data.RootElement.GetRawText();
-        if (dataJson.Length > 20_000)
+
+        if (dataJson.Length > maxDataJsonChars)
         {
-            dataJson = dataJson[..20_000] + "\n... conteúdo truncado ...";
+            dataJson = dataJson[..maxDataJsonChars] + "\n... conteúdo truncado ...";
         }
 
         var systemPrompt = """
@@ -226,13 +237,16 @@ JSON retornado pela API da Câmara:
         bool forceJson,
         CancellationToken cancellationToken)
     {
-        var apiKey = GetConfigurationValue("OPENAI_API_KEY", "Chat:OpenAI:ApiKey");
+        var apiKey = GetStringSetting("Chat:OpenAI:ApiKey", "OPENAI_API_KEY", string.Empty);
         if (string.IsNullOrWhiteSpace(apiKey))
         {
-            throw new InvalidOperationException("Configure OPENAI_API_KEY ou Chat:OpenAI:ApiKey antes de usar o provedor OpenAI.");
+            throw new InvalidOperationException("Configure Chat:OpenAI:ApiKey no appsettings.json antes de usar o provedor OpenAI.");
         }
 
-        var model = GetConfigurationValue("OPENAI_MODEL", "Chat:OpenAI:Model") ?? DefaultOpenAiModel;
+        var baseUrl = GetStringSetting("Chat:OpenAI:BaseUrl", "OPENAI_BASE_URL", DefaultOpenAiBaseUrl);
+        var model = GetStringSetting("Chat:OpenAI:Model", "OPENAI_MODEL", DefaultOpenAiModel);
+        var timeoutSeconds = GetIntSetting("Chat:OpenAI:TimeoutSeconds", "OPENAI_TIMEOUT_SECONDS", DefaultOpenAiTimeoutSeconds, minValue: 1, maxValue: 300);
+        var endpoint = BuildOpenAiEndpoint(baseUrl);
 
         var payload = new Dictionary<string, object?>
         {
@@ -249,12 +263,12 @@ JSON retornado pela API da Câmara:
             payload["response_format"] = new { type = "json_object" };
         }
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.openai.com/v1/chat/completions");
+        using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         request.Content = new StringContent(JsonSerializer.Serialize(payload, _jsonOptions), Encoding.UTF8, "application/json");
 
         var httpClient = _httpClientFactory.CreateClient();
-        using var response = await httpClient.SendAsync(request, cancellationToken);
+        using var response = await SendAsyncWithTimeout(httpClient, request, timeoutSeconds, cancellationToken);
         var responseText = await response.Content.ReadAsStringAsync(cancellationToken);
 
         if (!response.IsSuccessStatusCode)
@@ -283,8 +297,10 @@ JSON retornado pela API da Câmara:
         bool forceJson,
         CancellationToken cancellationToken)
     {
-        var baseUrl = GetConfigurationValue("OLLAMA_BASE_URL", "Chat:Ollama:BaseUrl") ?? DefaultOllamaBaseUrl;
-        var model = GetConfigurationValue("OLLAMA_MODEL", "Chat:Ollama:Model") ?? DefaultOllamaModel;
+        var baseUrl = GetStringSetting("Chat:Ollama:BaseUrl", "OLLAMA_BASE_URL", DefaultOllamaBaseUrl);
+        var model = GetStringSetting("Chat:Ollama:Model", "OLLAMA_MODEL", DefaultOllamaModel);
+        var timeoutSeconds = GetIntSetting("Chat:Ollama:TimeoutSeconds", "OLLAMA_TIMEOUT_SECONDS", DefaultOllamaTimeoutSeconds, minValue: 1, maxValue: 600);
+        var useJsonFormat = GetBoolSetting("Chat:Ollama:UseJsonFormat", "OLLAMA_USE_JSON_FORMAT", defaultValue: true);
         var endpoint = BuildOllamaEndpoint(baseUrl);
 
         var payload = new Dictionary<string, object?>
@@ -298,7 +314,7 @@ JSON retornado pela API da Câmara:
             }
         };
 
-        if (forceJson)
+        if (forceJson && useJsonFormat)
         {
             payload["format"] = "json";
         }
@@ -307,7 +323,7 @@ JSON retornado pela API da Câmara:
         request.Content = new StringContent(JsonSerializer.Serialize(payload, _jsonOptions), Encoding.UTF8, "application/json");
 
         var httpClient = _httpClientFactory.CreateClient();
-        using var response = await httpClient.SendAsync(request, cancellationToken);
+        using var response = await SendAsyncWithTimeout(httpClient, request, timeoutSeconds, cancellationToken);
         var responseText = await response.Content.ReadAsStringAsync(cancellationToken);
 
         if (!response.IsSuccessStatusCode)
@@ -340,14 +356,64 @@ JSON retornado pela API da Câmara:
 
     private string GetChatProvider()
     {
-        return (GetConfigurationValue("CHAT_PROVIDER", "Chat:Provider") ?? "ollama")
+        return GetStringSetting("Chat:Provider", "CHAT_PROVIDER", DefaultChatProvider)
             .Trim()
             .ToLowerInvariant();
     }
 
-    private string? GetConfigurationValue(string environmentKey, string configurationKey)
+    private string GetStringSetting(string configurationKey, string environmentKey, string defaultValue)
     {
-        return Environment.GetEnvironmentVariable(environmentKey) ?? _configuration[configurationKey];
+        var configurationValue = _configuration[configurationKey];
+        if (!string.IsNullOrWhiteSpace(configurationValue))
+        {
+            return configurationValue;
+        }
+
+        var environmentValue = Environment.GetEnvironmentVariable(environmentKey);
+        if (!string.IsNullOrWhiteSpace(environmentValue))
+        {
+            return environmentValue;
+        }
+
+        return defaultValue;
+    }
+
+    private int GetIntSetting(string configurationKey, string environmentKey, int defaultValue, int minValue, int maxValue)
+    {
+        var rawValue = GetStringSetting(configurationKey, environmentKey, defaultValue.ToString());
+        if (!int.TryParse(rawValue, out var value))
+        {
+            return defaultValue;
+        }
+
+        return Math.Clamp(value, minValue, maxValue);
+    }
+
+    private bool GetBoolSetting(string configurationKey, string environmentKey, bool defaultValue)
+    {
+        var rawValue = GetStringSetting(configurationKey, environmentKey, defaultValue.ToString());
+        return bool.TryParse(rawValue, out var value) ? value : defaultValue;
+    }
+
+    private static async Task<HttpResponseMessage> SendAsyncWithTimeout(
+        HttpClient httpClient,
+        HttpRequestMessage request,
+        int timeoutSeconds,
+        CancellationToken cancellationToken)
+    {
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+        return await httpClient.SendAsync(request, timeoutCts.Token);
+    }
+
+    private static Uri BuildOpenAiEndpoint(string baseUrl)
+    {
+        if (!baseUrl.EndsWith('/'))
+        {
+            baseUrl += "/";
+        }
+
+        return new Uri(new Uri(baseUrl), "chat/completions");
     }
 
     private static Uri BuildOllamaEndpoint(string baseUrl)
