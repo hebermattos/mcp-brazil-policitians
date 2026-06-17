@@ -133,17 +133,7 @@ try
         chatProvider = GetStringSetting(configuration, "Chat:Provider", "CHAT_PROVIDER", "ollama")
     }));
 
-    app.MapGet("/api/mcp/tools", () => Results.Ok(new[]
-    {
-        new McpDiagnosticTool("search_deputados", "Busca deputados por nome, UF, partido, legislatura e paginação.", ["nome", "siglaUf", "siglaPartido", "idLegislatura", "pagina", "itens"]),
-        new McpDiagnosticTool("get_deputado", "Obtém detalhes de um deputado pelo ID.", ["idDeputado"]),
-        new McpDiagnosticTool("get_deputado_despesas", "Lista despesas de um deputado pelo ID.", ["idDeputado", "pagina", "itens"]),
-        new McpDiagnosticTool("get_deputado_votacoes", "Lista votações de um deputado pelo ID.", ["idDeputado", "pagina", "itens"]),
-        new McpDiagnosticTool("search_proposicoes", "Busca proposições por tipo, número, ano, autor, keywords e paginação.", ["siglaTipo", "numero", "ano", "keywords", "autor", "dataInicio", "dataFim", "pagina", "itens"]),
-        new McpDiagnosticTool("get_proposicao", "Obtém detalhes de uma proposição pelo ID.", ["idProposicao"]),
-        new McpDiagnosticTool("search_eventos", "Busca eventos por data, descrição e paginação.", ["dataInicio", "dataFim", "descricao", "pagina", "itens"]),
-        new McpDiagnosticTool("search_orgaos", "Busca órgãos por sigla, nome e paginação.", ["sigla", "nome", "pagina", "itens"])
-    }));
+    app.MapGet("/api/mcp/tools", () => Results.Ok(McpDiagnosticToolCatalog.All));
 
     app.MapPost("/api/mcp/tools/call", async (
         McpDiagnosticToolCallRequest request,
