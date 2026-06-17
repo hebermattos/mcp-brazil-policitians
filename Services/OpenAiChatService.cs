@@ -125,33 +125,176 @@ public sealed class OpenAiChatService
         }
 
         var systemPrompt = $$"""
-Você é um planejador de ferramentas para a API de Dados Abertos da Câmara.
-Responda apenas JSON válido, sem markdown.
+Você é um planejador de ferramentas para a API de Dados Abertos da Câmara dos Deputados.
+Responda apenas JSON válido, sem markdown, sem comentários e sem texto fora do JSON.
+
+Formato obrigatório:
+{
+  "tool": "nome_da_ferramenta",
+  "arguments": {
+    "argumento": "valor"
+  }
+}
 
 Ferramentas permitidas e argumentos permitidos:
+
+Fallback genérico:
+- camara_api_get: path, pagina, itens, ordem, ordenarPor.
+
+Blocos:
+- search_blocos: idLegislatura, pagina, itens.
+- get_bloco: idBloco.
+
+Deputados:
 - search_deputados: nome, siglaUf, siglaPartido, idLegislatura, pagina, itens.
 - get_deputado: idDeputado.
+- get_deputado_despesas: idDeputado, ano, mes, pagina, itens.
+- get_deputado_discursos: idDeputado, dataInicio, dataFim, pagina, itens.
+- get_deputado_eventos: idDeputado, dataInicio, dataFim, pagina, itens.
+- get_deputado_frentes: idDeputado, pagina, itens.
+- get_deputado_orgaos: idDeputado, pagina, itens.
+- get_deputado_profissoes: idDeputado.
+- get_deputado_votacoes: idDeputado, pagina, itens.
+
+Eventos:
+- search_eventos: dataInicio, dataFim, descricao, idOrgao, pagina, itens.
+- get_evento: idEvento.
+- get_evento_orgaos: idEvento.
+- get_evento_requerimentos: idEvento.
+- get_evento_votacoes: idEvento.
+
+Frentes e grupos:
+- search_frentes: idLegislatura, pagina, itens.
+- get_frente: idFrente.
+- get_frente_membros: idFrente, pagina, itens.
+- search_grupos: idLegislatura, pagina, itens.
+- get_grupo: idGrupo.
+- get_grupo_membros: idGrupo, pagina, itens.
+
+Legislaturas:
+- search_legislaturas: dataInicio, dataFim, pagina, itens.
+- get_legislatura: idLegislatura.
+
+Órgãos:
+- search_orgaos: sigla, nome, tipoOrgao, pagina, itens.
+- get_orgao: idOrgao.
+- get_orgao_eventos: idOrgao, dataInicio, dataFim, pagina, itens.
+- get_orgao_membros: idOrgao, idLegislatura, pagina, itens.
+- get_orgao_votacoes: idOrgao, dataInicio, dataFim, pagina, itens.
+
+Partidos:
+- search_partidos: sigla, pagina, itens.
+- get_partido: idPartido.
+- get_partido_membros: idPartido, idLegislatura, pagina, itens.
+
+Proposições:
 - search_proposicoes: siglaTipo, numero, ano, keywords, autor, dataInicio, dataFim, pagina, itens.
 - get_proposicao: idProposicao.
-- search_eventos: dataInicio, dataFim, descricao, pagina, itens.
-- search_orgaos: sigla, nome, pagina, itens.
+- get_proposicao_autores: idProposicao.
+- get_proposicao_relacionadas: idProposicao.
+- get_proposicao_temas: idProposicao.
+- get_proposicao_tramitacoes: idProposicao.
+- get_proposicao_votacoes: idProposicao.
 
-Regras:
-- Para deputados, parlamentares, partido ou deputados por partido, use search_deputados.
-- Para projetos de lei, PEC, MP, proposições ou temas legislativos, use search_proposicoes.
-- Para busca por assunto de proposição, use keywords. Nunca use ementa.
-- Use pagina {{defaultPage}} e itens no máximo {{defaultItems}} quando o usuário não informar.
-- Para UF use siglaUf. Para partido use siglaPartido.
-- Não invente autor, dataInicio, dataFim, siglaTipo, numero ou ano quando o usuário não informar explicitamente.
-- Nunca crie nomes de ferramentas ou argumentos fora da lista permitida.
+Referências:
+- search_referencias: tipo.
 
-Formato:
+Votações:
+- search_votacoes: dataInicio, dataFim, idOrgao, siglaUf, pagina, itens.
+- get_votacao: idVotacao.
+- get_votacao_orientacoes: idVotacao.
+- get_votacao_votos: idVotacao.
+
+Regras gerais:
+- Use pagina {{defaultPage}} e itens no máximo {{defaultItems}} quando o usuário não informar paginação.
+- Não invente IDs. Só use idDeputado, idProposicao, idVotacao, idOrgao, idEvento, idPartido, idFrente, idGrupo, idBloco ou idLegislatura quando o usuário informar explicitamente um ID.
+- Se o usuário informar apenas nome de deputado/deputada, use search_deputados com nome. Não invente idDeputado.
+- Se a pergunta exigir descobrir um ID antes de consultar outro recurso, escolha a primeira ferramenta que encontra a entidade. O backend possui handlers encadeados para alguns casos comuns.
+- Para UF use siglaUf somente quando houver sigla real de estado brasileiro ou nome de estado. Não interprete a palavra "se" como Sergipe.
+- Para partido use siglaPartido.
+- Datas devem estar em yyyy-MM-dd.
+- Para listagens genéricas, use apenas pagina e itens.
+- Não use keywords para frases genéricas de intenção como "lista de proposições", "listar proposições", "mostrar proposições" ou apenas "proposições".
+- Para busca por assunto/tema/texto de proposição, use keywords.
+- Nunca use argumentos fora da lista permitida da ferramenta escolhida.
+
+Regras de seleção:
+- Deputados, parlamentares, bancada por UF ou partido: search_deputados.
+- Perfil/detalhe de deputado por ID: get_deputado.
+- Despesas, gastos, cota, reembolsos de deputado por ID: get_deputado_despesas.
+- Discursos de deputado por ID: get_deputado_discursos.
+- Eventos/agenda de deputado por ID: get_deputado_eventos.
+- Frentes de deputado por ID: get_deputado_frentes.
+- Órgãos/comissões de deputado por ID: get_deputado_orgaos.
+- Profissões de deputado por ID: get_deputado_profissoes.
+- Votações/votos de deputado por ID: get_deputado_votacoes.
+- Proposições, projetos, PL, PEC, MPV, PDL, requerimentos: search_proposicoes.
+- Detalhes de proposição por ID: get_proposicao.
+- Autores de proposição por ID: get_proposicao_autores.
+- Tramitação de proposição por ID: get_proposicao_tramitacoes.
+- Temas de proposição por ID: get_proposicao_temas.
+- Votações de proposição por ID: get_proposicao_votacoes.
+- Votações em geral: search_votacoes.
+- Votos individuais de uma votação por ID: get_votacao_votos.
+- Orientações de bancada de uma votação por ID: get_votacao_orientacoes.
+- Eventos/reuniões/audiências/sessões: search_eventos.
+- Órgãos, comissões, mesa, liderança: search_orgaos.
+- Partidos: search_partidos.
+- Frentes parlamentares: search_frentes.
+- Grupos parlamentares: search_grupos.
+- Legislaturas: search_legislaturas.
+- Tabelas auxiliares, tipos, situações, siglas e referências da API: search_referencias.
+- Se nenhuma ferramenta específica cobrir a pergunta, use camara_api_get com path relativo da API v2.
+
+Exemplos:
+Usuário: lista de proposições
+Resposta:
+{
+  "tool": "search_proposicoes",
+  "arguments": {
+    "pagina": "{{defaultPage}}",
+    "itens": "{{defaultItems}}"
+  }
+}
+
+Usuário: proposições sobre escala 6x1
+Resposta:
 {
   "tool": "search_proposicoes",
   "arguments": {
     "keywords": "escala 6x1",
-    "pagina": {{defaultPage}},
-    "itens": {{defaultItems}}
+    "pagina": "{{defaultPage}}",
+    "itens": "{{defaultItems}}"
+  }
+}
+
+Usuário: despesas do deputado 220645 em 2024
+Resposta:
+{
+  "tool": "get_deputado_despesas",
+  "arguments": {
+    "idDeputado": "220645",
+    "ano": "2024",
+    "pagina": "{{defaultPage}}",
+    "itens": "{{defaultItems}}"
+  }
+}
+
+Usuário: autores da proposição 2345639
+Resposta:
+{
+  "tool": "get_proposicao_autores",
+  "arguments": {
+    "idProposicao": "2345639"
+  }
+}
+
+Usuário: votos da votação 12345
+Resposta:
+{
+  "tool": "get_votacao_votos",
+  "arguments": {
+    "idVotacao": "12345"
   }
 }
 """;
@@ -314,12 +457,51 @@ Formato:
 
         return plan.Tool.ToLowerInvariant() switch
         {
+            "camara_api_get" => (SafeRelativePath(Required(args, "path")), args.Where(x => !x.Key.Equals("path", StringComparison.OrdinalIgnoreCase)).ToDictionary(x => x.Key, x => x.Value, StringComparer.OrdinalIgnoreCase)),
+            "search_blocos" => ("blocos", query),
+            "get_bloco" => ($"blocos/{Required(args, "idBloco")}", EmptyQuery()),
             "search_deputados" => ("deputados", query),
             "get_deputado" => ($"deputados/{Required(args, "idDeputado")}", EmptyQuery()),
+            "get_deputado_despesas" => ($"deputados/{Required(args, "idDeputado")}/despesas", query),
+            "get_deputado_discursos" => ($"deputados/{Required(args, "idDeputado")}/discursos", query),
+            "get_deputado_eventos" => ($"deputados/{Required(args, "idDeputado")}/eventos", query),
+            "get_deputado_frentes" => ($"deputados/{Required(args, "idDeputado")}/frentes", query),
+            "get_deputado_orgaos" => ($"deputados/{Required(args, "idDeputado")}/orgaos", query),
+            "get_deputado_profissoes" => ($"deputados/{Required(args, "idDeputado")}/profissoes", query),
+            "get_deputado_votacoes" => ($"deputados/{Required(args, "idDeputado")}/votacoes", query),
+            "search_eventos" => ("eventos", query),
+            "get_evento" => ($"eventos/{Required(args, "idEvento")}", EmptyQuery()),
+            "get_evento_orgaos" => ($"eventos/{Required(args, "idEvento")}/orgaos", query),
+            "get_evento_requerimentos" => ($"eventos/{Required(args, "idEvento")}/requerimentos", query),
+            "get_evento_votacoes" => ($"eventos/{Required(args, "idEvento")}/votacoes", query),
+            "search_frentes" => ("frentes", query),
+            "get_frente" => ($"frentes/{Required(args, "idFrente")}", EmptyQuery()),
+            "get_frente_membros" => ($"frentes/{Required(args, "idFrente")}/membros", query),
+            "search_grupos" => ("grupos", query),
+            "get_grupo" => ($"grupos/{Required(args, "idGrupo")}", EmptyQuery()),
+            "get_grupo_membros" => ($"grupos/{Required(args, "idGrupo")}/membros", query),
+            "search_legislaturas" => ("legislaturas", query),
+            "get_legislatura" => ($"legislaturas/{Required(args, "idLegislatura")}", EmptyQuery()),
+            "search_orgaos" => ("orgaos", query),
+            "get_orgao" => ($"orgaos/{Required(args, "idOrgao")}", EmptyQuery()),
+            "get_orgao_eventos" => ($"orgaos/{Required(args, "idOrgao")}/eventos", query),
+            "get_orgao_membros" => ($"orgaos/{Required(args, "idOrgao")}/membros", query),
+            "get_orgao_votacoes" => ($"orgaos/{Required(args, "idOrgao")}/votacoes", query),
+            "search_partidos" => ("partidos", query),
+            "get_partido" => ($"partidos/{Required(args, "idPartido")}", EmptyQuery()),
+            "get_partido_membros" => ($"partidos/{Required(args, "idPartido")}/membros", query),
             "search_proposicoes" => ("proposicoes", query),
             "get_proposicao" => ($"proposicoes/{Required(args, "idProposicao")}", EmptyQuery()),
-            "search_eventos" => ("eventos", query),
-            "search_orgaos" => ("orgaos", query),
+            "get_proposicao_autores" => ($"proposicoes/{Required(args, "idProposicao")}/autores", query),
+            "get_proposicao_relacionadas" => ($"proposicoes/{Required(args, "idProposicao")}/relacionadas", query),
+            "get_proposicao_temas" => ($"proposicoes/{Required(args, "idProposicao")}/temas", query),
+            "get_proposicao_tramitacoes" => ($"proposicoes/{Required(args, "idProposicao")}/tramitacoes", query),
+            "get_proposicao_votacoes" => ($"proposicoes/{Required(args, "idProposicao")}/votacoes", query),
+            "search_referencias" => ($"referencias/{SafeRelativePath(Required(args, "tipo"))}", query),
+            "search_votacoes" => ("votacoes", query),
+            "get_votacao" => ($"votacoes/{Required(args, "idVotacao")}", EmptyQuery()),
+            "get_votacao_orientacoes" => ($"votacoes/{Required(args, "idVotacao")}/orientacoes", query),
+            "get_votacao_votos" => ($"votacoes/{Required(args, "idVotacao")}/votos", query),
             _ => throw new InvalidOperationException($"Ferramenta não suportada pelo backend de chat: {plan.Tool}")
         };
     }
@@ -336,8 +518,10 @@ Formato:
         var systemPrompt = """
 Você responde em português do Brasil usando somente o JSON fornecido da Câmara dos Deputados.
 Não invente dados. Se houver lista, resuma de forma legível.
+Se o usuário pedir tabela, retorne uma tabela Markdown com colunas relevantes.
 Se o usuário pedir agrupamento, agrupe apenas os itens retornados.
 Se não houver resultado, diga que não encontrou resultados com os filtros usados.
+Informe quando a resposta estiver limitada pela paginação retornada.
 """;
 
         var userContent = $"""
@@ -658,24 +842,6 @@ JSON retornado pela API da Câmara:
             ["itens"] = defaultItems.ToString(CultureInfo.InvariantCulture)
         };
 
-        if (LooksLikeDeputadosSearch(normalizedPrompt))
-        {
-            var uf = ExtractBrazilianStateUf(prompt);
-            if (!string.IsNullOrWhiteSpace(uf))
-            {
-                args["siglaUf"] = uf;
-            }
-
-            var partido = ExtractParty(prompt);
-            if (!string.IsNullOrWhiteSpace(partido))
-            {
-                args["siglaPartido"] = partido;
-            }
-
-            plan = new ToolPlan("search_deputados", NormalizeArguments("search_deputados", args));
-            return true;
-        }
-
         if (LooksLikeProposicoesSearch(normalizedPrompt))
         {
             var subject = ExtractSubjectKeywords(prompt);
@@ -701,6 +867,24 @@ JSON retornado pela API da Câmara:
             return true;
         }
 
+        if (LooksLikeDeputadosSearch(normalizedPrompt))
+        {
+            var uf = ExtractBrazilianStateUf(prompt);
+            if (!string.IsNullOrWhiteSpace(uf))
+            {
+                args["siglaUf"] = uf;
+            }
+
+            var partido = ExtractParty(prompt);
+            if (!string.IsNullOrWhiteSpace(partido))
+            {
+                args["siglaPartido"] = partido;
+            }
+
+            plan = new ToolPlan("search_deputados", NormalizeArguments("search_deputados", args));
+            return true;
+        }
+
         plan = new ToolPlan(string.Empty, EmptyQuery());
         return false;
     }
@@ -717,10 +901,24 @@ JSON retornado pela API da Câmara:
         {
             "search_depetados" or "search_deputado" or "deputados_search" or "buscar_deputados" or "listar_deputados" or "deputados" => "search_deputados",
             "get_deputados" or "deputado" or "detalhe_deputado" => "get_deputado",
+            "despesas_deputado" or "gastos_deputado" => "get_deputado_despesas",
+            "discursos_deputado" => "get_deputado_discursos",
+            "eventos_deputado" => "get_deputado_eventos",
+            "frentes_deputado" => "get_deputado_frentes",
+            "orgaos_deputado" or "comissoes_deputado" => "get_deputado_orgaos",
+            "profissoes_deputado" => "get_deputado_profissoes",
+            "votacoes_deputado" or "votos_deputado" => "get_deputado_votacoes",
             "search_proposicao" or "buscar_proposicoes" or "listar_proposicoes" or "proposicoes" => "search_proposicoes",
             "get_proposicoes" or "proposicao" or "detalhe_proposicao" => "get_proposicao",
+            "autores_proposicao" => "get_proposicao_autores",
+            "tramitacoes_proposicao" or "tramites_proposicao" => "get_proposicao_tramitacoes",
+            "temas_proposicao" => "get_proposicao_temas",
+            "votacoes_proposicao" => "get_proposicao_votacoes",
             "search_evento" or "buscar_eventos" or "eventos" => "search_eventos",
-            "buscar_orgaos" or "orgaos" or "comissoes" => "search_orgaos",
+            "search_orgao" or "buscar_orgaos" or "orgaos" or "comissoes" => "search_orgaos",
+            "partidos" or "buscar_partidos" => "search_partidos",
+            "votacoes" or "buscar_votacoes" => "search_votacoes",
+            "referencias" => "search_referencias",
             _ => value
         };
     }
@@ -815,6 +1013,15 @@ JSON retornado pela API da Câmara:
         var key = name.Trim().ToLowerInvariant().Replace("-", string.Empty).Replace("_", string.Empty);
         return tool.ToLowerInvariant() switch
         {
+            "camara_api_get" => key switch
+            {
+                "path" or "caminho" => "path",
+                "pagina" or "page" => "pagina",
+                "itens" or "items" or "limit" or "limite" or "quantidade" => "itens",
+                "ordem" or "order" => "ordem",
+                "ordenarpor" or "orderby" or "sort" => "ordenarPor",
+                _ => name
+            },
             "search_deputados" => key switch
             {
                 "nome" or "name" or "nomedeputado" or "deputado" or "deputada" => "nome",
@@ -830,6 +1037,17 @@ JSON retornado pela API da Câmara:
                 "iddeputado" or "id" or "deputadoid" => "idDeputado",
                 _ => null
             },
+            "get_deputado_despesas" or "get_deputado_discursos" or "get_deputado_eventos" or "get_deputado_frentes" or "get_deputado_orgaos" or "get_deputado_profissoes" or "get_deputado_votacoes" => key switch
+            {
+                "iddeputado" or "id" or "deputadoid" => "idDeputado",
+                "ano" or "year" => "ano",
+                "mes" or "month" => "mes",
+                "datainicio" or "inicio" or "startdate" => "dataInicio",
+                "datafim" or "fim" or "enddate" => "dataFim",
+                "pagina" or "page" => "pagina",
+                "itens" or "items" or "limit" or "limite" or "quantidade" => "itens",
+                _ => null
+            },
             "search_proposicoes" => key switch
             {
                 "siglatipo" or "tipo" => "siglaTipo",
@@ -843,7 +1061,7 @@ JSON retornado pela API da Câmara:
                 "itens" or "items" or "limit" or "limite" or "quantidade" => "itens",
                 _ => null
             },
-            "get_proposicao" => key switch
+            "get_proposicao" or "get_proposicao_autores" or "get_proposicao_relacionadas" or "get_proposicao_temas" or "get_proposicao_tramitacoes" or "get_proposicao_votacoes" => key switch
             {
                 "idproposicao" or "id" or "proposicaoid" => "idProposicao",
                 _ => null
@@ -853,16 +1071,108 @@ JSON retornado pela API da Câmara:
                 "datainicio" or "inicio" or "startdate" => "dataInicio",
                 "datafim" or "fim" or "enddate" => "dataFim",
                 "descricao" or "description" or "assunto" or "tema" or "query" or "q" => "descricao",
+                "idorgao" or "orgaoid" => "idOrgao",
                 "pagina" or "page" => "pagina",
                 "itens" or "items" or "limit" or "limite" or "quantidade" => "itens",
+                _ => null
+            },
+            "get_evento" or "get_evento_orgaos" or "get_evento_requerimentos" or "get_evento_votacoes" => key switch
+            {
+                "idevento" or "id" or "eventoid" => "idEvento",
                 _ => null
             },
             "search_orgaos" => key switch
             {
                 "sigla" => "sigla",
                 "nome" or "name" or "orgao" or "comissao" => "nome",
+                "tipoorgao" or "tipo" => "tipoOrgao",
                 "pagina" or "page" => "pagina",
                 "itens" or "items" or "limit" or "limite" or "quantidade" => "itens",
+                _ => null
+            },
+            "get_orgao" or "get_orgao_eventos" or "get_orgao_membros" or "get_orgao_votacoes" => key switch
+            {
+                "idorgao" or "id" or "orgaoid" => "idOrgao",
+                "idlegislatura" or "legislatura" => "idLegislatura",
+                "datainicio" or "inicio" or "startdate" => "dataInicio",
+                "datafim" or "fim" or "enddate" => "dataFim",
+                "pagina" or "page" => "pagina",
+                "itens" or "items" or "limit" or "limite" or "quantidade" => "itens",
+                _ => null
+            },
+            "search_partidos" => key switch
+            {
+                "sigla" or "partido" => "sigla",
+                "pagina" or "page" => "pagina",
+                "itens" or "items" or "limit" or "limite" or "quantidade" => "itens",
+                _ => null
+            },
+            "get_partido" or "get_partido_membros" => key switch
+            {
+                "idpartido" or "id" or "partidoid" => "idPartido",
+                "idlegislatura" or "legislatura" => "idLegislatura",
+                "pagina" or "page" => "pagina",
+                "itens" or "items" or "limit" or "limite" or "quantidade" => "itens",
+                _ => null
+            },
+            "search_votacoes" => key switch
+            {
+                "datainicio" or "inicio" or "startdate" => "dataInicio",
+                "datafim" or "fim" or "enddate" => "dataFim",
+                "idorgao" or "orgaoid" => "idOrgao",
+                "siglauf" or "uf" => "siglaUf",
+                "pagina" or "page" => "pagina",
+                "itens" or "items" or "limit" or "limite" or "quantidade" => "itens",
+                _ => null
+            },
+            "get_votacao" or "get_votacao_orientacoes" or "get_votacao_votos" => key switch
+            {
+                "idvotacao" or "id" or "votacaoid" => "idVotacao",
+                _ => null
+            },
+            "search_referencias" => key switch
+            {
+                "tipo" or "referencia" or "path" => "tipo",
+                _ => null
+            },
+            "search_blocos" => key switch
+            {
+                "idlegislatura" or "legislatura" => "idLegislatura",
+                "pagina" or "page" => "pagina",
+                "itens" or "items" or "limit" or "limite" or "quantidade" => "itens",
+                _ => null
+            },
+            "get_bloco" => key switch
+            {
+                "idbloco" or "id" or "blocoid" => "idBloco",
+                _ => null
+            },
+            "search_frentes" or "search_grupos" or "search_legislaturas" => key switch
+            {
+                "idlegislatura" or "legislatura" => "idLegislatura",
+                "datainicio" or "inicio" or "startdate" => "dataInicio",
+                "datafim" or "fim" or "enddate" => "dataFim",
+                "pagina" or "page" => "pagina",
+                "itens" or "items" or "limit" or "limite" or "quantidade" => "itens",
+                _ => null
+            },
+            "get_frente" or "get_frente_membros" => key switch
+            {
+                "idfrente" or "id" or "frenteid" => "idFrente",
+                "pagina" or "page" => "pagina",
+                "itens" or "items" or "limit" or "limite" or "quantidade" => "itens",
+                _ => null
+            },
+            "get_grupo" or "get_grupo_membros" => key switch
+            {
+                "idgrupo" or "id" or "grupoid" => "idGrupo",
+                "pagina" or "page" => "pagina",
+                "itens" or "items" or "limit" or "limite" or "quantidade" => "itens",
+                _ => null
+            },
+            "get_legislatura" => key switch
+            {
+                "idlegislatura" or "id" or "legislatura" => "idLegislatura",
                 _ => null
             },
             _ => null
@@ -887,8 +1197,10 @@ JSON retornado pela API da Câmara:
             "siglaTipo" => KnownPropositionTypes.Contains(value),
             "numero" => Regex.IsMatch(value, "^[0-9]+$"),
             "ano" => Regex.IsMatch(value, "^(19|20)[0-9]{2}$"),
+            "mes" => Regex.IsMatch(value, "^(0?[1-9]|1[0-2])$"),
             "dataInicio" or "dataFim" => Regex.IsMatch(value, "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"),
-            "pagina" or "itens" or "idDeputado" or "idProposicao" or "idLegislatura" => Regex.IsMatch(value, "^[0-9]+$"),
+            "pagina" or "itens" or "idDeputado" or "idProposicao" or "idLegislatura" or "idOrgao" or "idEvento" or "idPartido" or "idVotacao" or "idFrente" or "idGrupo" or "idBloco" => Regex.IsMatch(value, "^[0-9]+$"),
+            "path" or "tipo" => !value.Contains("..", StringComparison.Ordinal) && !value.Contains("://", StringComparison.Ordinal),
             _ => true
         };
     }
@@ -942,60 +1254,70 @@ JSON retornado pela API da Câmara:
 
     private static (string Type, string Number)? ExtractPropositionTypeAndNumber(string prompt)
     {
-        var match = Regex.Match(prompt, @"\b(?<type>PLP|PEC|MPV|PDL|PRC|REQ|PL)\s*(?<number>[0-9]+)\b", RegexOptions.IgnoreCase);
-        return match.Success
-            ? (match.Groups["type"].Value.ToUpperInvariant(), match.Groups["number"].Value)
-            : null;
+        var match = Regex.Match(prompt, @"\b(?<type>PLP|PEC|MPV|PDL|PRC|PL|REQ|RIC|INC|RCP)\s*(?<number>\d+)\b", RegexOptions.IgnoreCase);
+        return match.Success ? (match.Groups["type"].Value.ToUpperInvariant(), match.Groups["number"].Value) : null;
     }
 
     private static string? ExtractYear(string prompt)
     {
-        var match = Regex.Match(prompt, @"\b(19|20)[0-9]{2}\b");
+        var match = Regex.Match(prompt, @"\b(19|20)\d{2}\b");
         return match.Success ? match.Value : null;
     }
 
     private static string NormalizePromptText(string value)
     {
-        var normalized = value.Trim().ToLowerInvariant();
-        normalized = normalized
-            .Replace("á", "a").Replace("à", "a").Replace("ã", "a").Replace("â", "a")
-            .Replace("é", "e").Replace("ê", "e")
-            .Replace("í", "i")
-            .Replace("ó", "o").Replace("õ", "o").Replace("ô", "o")
-            .Replace("ú", "u")
-            .Replace("ç", "c");
+        var normalized = value.ToLowerInvariant().Normalize(NormalizationForm.FormD);
+        var builder = new StringBuilder();
+        foreach (var character in normalized)
+        {
+            if (CharUnicodeInfo.GetUnicodeCategory(character) != UnicodeCategory.NonSpacingMark)
+            {
+                builder.Append(character);
+            }
+        }
 
-        return Regex.Replace(normalized, "\\s+", " ");
+        return Regex.Replace(builder.ToString(), "\\s+", " ").Trim();
     }
 
-    private static string Required(IReadOnlyDictionary<string, string?> args, string key)
+    private static string? ConvertJsonElementToString(JsonElement value)
     {
-        return args.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
-            ? value
-            : throw new InvalidOperationException($"O argumento obrigatório '{key}' não foi informado.");
+        return value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString(),
+            JsonValueKind.Number => value.GetRawText(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            _ => null
+        };
     }
 
     private static bool IsIdentifierArgument(string key)
     {
-        return key.Equals("idDeputado", StringComparison.OrdinalIgnoreCase)
-            || key.Equals("idProposicao", StringComparison.OrdinalIgnoreCase);
+        return key.StartsWith("id", StringComparison.OrdinalIgnoreCase)
+            || key.Equals("path", StringComparison.OrdinalIgnoreCase)
+            || key.Equals("tipo", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string Required(IReadOnlyDictionary<string, string?> arguments, string key)
+    {
+        return arguments.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
+            ? value
+            : throw new InvalidOperationException($"O argumento obrigatório '{key}' não foi informado.");
+    }
+
+    private static string SafeRelativePath(string path)
+    {
+        var value = path.Trim().TrimStart('/');
+        if (string.IsNullOrWhiteSpace(value)
+            || value.Contains("..", StringComparison.Ordinal)
+            || value.Contains("://", StringComparison.Ordinal)
+            || !Regex.IsMatch(value, "^[A-Za-z0-9_./-]+$"))
+        {
+            throw new InvalidOperationException($"Caminho de API inválido: '{path}'. Use apenas caminhos relativos da API v2.");
+        }
+
+        return value;
     }
 
     private static IReadOnlyDictionary<string, string?> EmptyQuery() => new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-
-    private static string? ConvertJsonElementToString(JsonElement element)
-    {
-        return element.ValueKind switch
-        {
-            JsonValueKind.String => element.GetString(),
-            JsonValueKind.Number => element.GetRawText(),
-            JsonValueKind.True => "true",
-            JsonValueKind.False => "false",
-            JsonValueKind.Null => null,
-            JsonValueKind.Undefined => null,
-            _ => element.GetRawText()
-        };
-    }
-
-    private sealed record ToolPlan(string Tool, IReadOnlyDictionary<string, string?> Arguments);
 }
