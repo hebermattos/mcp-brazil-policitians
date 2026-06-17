@@ -6,4 +6,5 @@ public sealed record ChatPromptResponse(
     string Answer,
     string? Tool,
     IReadOnlyDictionary<string, object?>? Arguments,
-    JsonElement? Data);
+    JsonElement? Data,
+    string? LogFilePath);
