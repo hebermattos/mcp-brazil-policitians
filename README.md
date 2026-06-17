@@ -58,7 +58,7 @@ Todas as configurações principais podem ser definidas no `appsettings.json`. O
     },
     "Ollama": {
       "BaseUrl": "http://localhost:11434",
-      "Model": "llama3.1:8b",
+      "Model": "llama3.2:1B",
       "TimeoutSeconds": 120,
       "UseJsonFormat": true
     }
@@ -110,7 +110,7 @@ Para usar OpenAI:
 Antes de rodar com o padrão atual:
 
 ```bash
-ollama pull llama3.1:8b
+ollama pull llama3.2:1B
 ollama serve
 ```
 
@@ -143,7 +143,7 @@ OPENAI_API_KEY=sua-chave
 OPENAI_MODEL=gpt-4.1-mini
 OPENAI_TIMEOUT_SECONDS=60
 OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=llama3.1:8b
+OLLAMA_MODEL=llama3.2:1B
 OLLAMA_TIMEOUT_SECONDS=120
 OLLAMA_USE_JSON_FORMAT=true
 CAMARA_API_BASE_URL=https://dadosabertos.camara.leg.br/api/v2/
@@ -218,38 +218,3 @@ Exemplos de prompt:
 
 - `SearchEventosAsync`: busca eventos da Câmara.
 - `GetEventoAsync`: detalhe de evento.
-- `SearchOrgaosAsync`: busca órgãos/comissões.
-- `GetOrgaoAsync`: detalhe de órgão/comissão.
-- `GetOrgaoMembrosAsync`: membros de órgão/comissão.
-
-### Raw/extensível
-
-- `CamaraApiGetAsync`: chama qualquer caminho relativo da API v2 com query string opcional em JSON.
-
-Exemplo:
-
-```json
-{
-  "path": "deputados",
-  "queryJson": "{\"nome\":\"Maria\",\"siglaUf\":\"RS\",\"itens\":5}"
-}
-```
-
-## Configuração em clientes MCP HTTP
-
-Use o endpoint HTTP configurado em `Mcp:Endpoint`:
-
-```text
-http://localhost:5000/mcp
-```
-
-O transporte é Streamable HTTP. Clientes MCP compatíveis devem chamar esse endpoint usando JSON-RPC MCP sobre HTTP.
-
-## Segurança e limites
-
-- O fallback `CamaraApiGetAsync` aceita apenas caminhos relativos.
-- URLs absolutas são bloqueadas para evitar SSRF.
-- `..` no path é bloqueado para evitar path traversal.
-- Recomenda-se limitar `Chat:DefaultSearchItems` para evitar respostas muito grandes.
-- A política de CORS atual é permissiva para facilitar testes locais. Restrinja as origens antes de expor em rede pública.
-- Não exponha `Chat:OpenAI:ApiKey` no frontend. A chave fica somente no backend.
