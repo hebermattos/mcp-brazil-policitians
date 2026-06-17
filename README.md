@@ -20,7 +20,7 @@ https://dadosabertos.camara.leg.br/swagger/api.html
 - ASP.NET Core Minimal API
 - MCP C# SDK (`ModelContextProtocol`)
 - Transporte MCP via Streamable HTTP
-- Backend de chat com OpenAI
+- Backend de chat com OpenAI ou Ollama local
 - API REST da Câmara dos Deputados
 - Cache local SQLite para respostas da API da Câmara
 
@@ -29,7 +29,7 @@ https://dadosabertos.camara.leg.br/swagger/api.html
 | Endpoint | Descrição |
 | --- | --- |
 | `/` | Página HTML de chat para prompts em linguagem natural. |
-| `/api/chat` | Backend HTTP usado pela página de chat. Chama OpenAI e consulta a API da Câmara. |
+| `/api/chat` | Backend HTTP usado pela página de chat. Chama o provedor configurado e consulta a API da Câmara. |
 | `/mcp` | Endpoint MCP via Streamable HTTP. |
 | `/health` | Health check simples do servidor. |
 
@@ -72,25 +72,67 @@ Exemplo:
 }
 ```
 
-## Como rodar
+## Configuração do provedor de chat
 
-Configure a chave da OpenAI antes de usar o chat da página `/`:
+O backend de chat pode usar `openai` ou `ollama`.
 
-### Linux/macOS
+### Via `appsettings.json`
+
+```json
+{
+  "Chat": {
+    "Provider": "ollama",
+    "OpenAI": {
+      "Model": "gpt-4.1-mini"
+    },
+    "Ollama": {
+      "BaseUrl": "http://localhost:11434",
+      "Model": "llama3.1:8b"
+    }
+  }
+}
+```
+
+Para usar OpenAI:
+
+```json
+{
+  "Chat": {
+    "Provider": "openai",
+    "OpenAI": {
+      "Model": "gpt-4.1-mini"
+    }
+  }
+}
+```
+
+### Via variáveis de ambiente
+
+OpenAI:
 
 ```bash
+export CHAT_PROVIDER="openai"
 export OPENAI_API_KEY="sua-chave"
 export OPENAI_MODEL="gpt-4.1-mini"
 ```
 
-### PowerShell
+Ollama local:
 
-```powershell
-$env:OPENAI_API_KEY="sua-chave"
-$env:OPENAI_MODEL="gpt-4.1-mini"
+```bash
+export CHAT_PROVIDER="ollama"
+export OLLAMA_BASE_URL="http://localhost:11434"
+export OLLAMA_MODEL="llama3.1:8b"
 ```
 
-Depois rode:
+PowerShell com Ollama:
+
+```powershell
+$env:CHAT_PROVIDER="ollama"
+$env:OLLAMA_BASE_URL="http://localhost:11434"
+$env:OLLAMA_MODEL="llama3.1:8b"
+```
+
+## Como rodar
 
 ```bash
 dotnet restore
@@ -122,9 +164,9 @@ A página inicial envia o prompt para `/api/chat`.
 Fluxo do backend:
 
 1. Recebe o prompt do usuário.
-2. Usa OpenAI para escolher a consulta adequada.
+2. Usa o provedor configurado (`openai` ou `ollama`) para escolher a consulta adequada.
 3. Consulta a API de Dados Abertos da Câmara.
-4. Usa OpenAI novamente para transformar o JSON retornado em uma resposta em português.
+4. Usa o provedor configurado novamente para transformar o JSON retornado em uma resposta em português.
 5. Retorna a resposta, a ferramenta lógica usada, os argumentos e os dados brutos.
 
 Exemplos de prompt:
@@ -153,8 +195,11 @@ O cliente da Câmara pode ser configurado por variáveis de ambiente:
 CAMARA_API_BASE_URL=https://dadosabertos.camara.leg.br/api/v2/
 CAMARA_API_TIMEOUT_SECONDS=30
 CAMARA_API_CACHE_SQLITE_PATH=/caminho/para/camara-api-cache.sqlite
+CHAT_PROVIDER=openai
 OPENAI_API_KEY=sua-chave
 OPENAI_MODEL=gpt-4.1-mini
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=llama3.1:8b
 ```
 
 Quando `CAMARA_API_CACHE_SQLITE_PATH` não é definido, o cache é salvo em:
