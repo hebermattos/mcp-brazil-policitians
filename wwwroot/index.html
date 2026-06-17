@@ -179,10 +179,10 @@
   <div class="app">
     <header>
       <h1>Chat MCP Brazil Politicians</h1>
-      <p>Faça perguntas em linguagem natural. O backend usa OpenAI e consulta dados da Câmara.</p>
+      <p>Faça perguntas em linguagem natural. O backend usa o provedor configurado no appsettings.json.</p>
     </header>
 
-    <div id="status" class="status">Chat pronto.</div>
+    <div id="status" class="status">Carregando configurações...</div>
     <main id="messages" class="messages"></main>
 
     <form id="chatForm">
@@ -196,15 +196,14 @@
   </div>
 
   <script>
-    const chatEndpoint = "/api/chat";
+    let chatEndpoint = "/api/chat";
+    let chatProvider = "ollama";
 
     const messagesEl = document.getElementById("messages");
     const statusEl = document.getElementById("status");
     const formEl = document.getElementById("chatForm");
     const promptEl = document.getElementById("prompt");
     const sendButtonEl = document.getElementById("sendButton");
-
-    addMessage("system", "Chat conectado ao backend com OpenAI. Configure OPENAI_API_KEY no servidor para habilitar as respostas.");
 
     formEl.addEventListener("submit", async event => {
       event.preventDefault();
@@ -222,6 +221,24 @@
       promptEl.style.height = "auto";
       promptEl.style.height = Math.min(promptEl.scrollHeight, 160) + "px";
     });
+
+    loadClientSettings();
+
+    async function loadClientSettings() {
+      try {
+        const response = await fetch("/api/client-settings", { headers: { "Accept": "application/json" } });
+        if (response.ok) {
+          const settings = await response.json();
+          chatEndpoint = settings.chatEndpoint || chatEndpoint;
+          chatProvider = settings.chatProvider || chatProvider;
+        }
+      } catch {
+        // Mantém defaults locais caso as configurações não carreguem.
+      }
+
+      statusEl.textContent = "Chat pronto. Provedor: " + chatProvider + ".";
+      addMessage("system", "Chat conectado ao backend. Provedor configurado: " + chatProvider + ".");
+    }
 
     async function submitPrompt() {
       const prompt = promptEl.value.trim();
@@ -297,7 +314,7 @@
     function setBusy(isBusy) {
       sendButtonEl.disabled = isBusy;
       promptEl.disabled = isBusy;
-      statusEl.textContent = isBusy ? "Consultando OpenAI e Câmara..." : "Chat pronto.";
+      statusEl.textContent = isBusy ? "Consultando " + chatProvider + " e Câmara..." : "Chat pronto. Provedor: " + chatProvider + ".";
     }
 
     function escapeHtml(value) {
