@@ -30,13 +30,13 @@ public sealed class OpenAiChatService
         ArgumentException.ThrowIfNullOrWhiteSpace(prompt);
 
         var plan = await CreateToolPlanAsync(prompt, cancellationToken);
-        var data = await ExecuteCamaraToolAsync(plan, cancellationToken);
+        using var data = await ExecuteCamaraToolAsync(plan, cancellationToken);
         var answer = await CreateFinalAnswerAsync(prompt, plan, data, cancellationToken);
 
         return new ChatPromptResponse(
             answer,
             plan.Tool,
-            plan.Arguments.ToDictionary(x => x.Key, x => x.Value, StringComparer.OrdinalIgnoreCase),
+            plan.Arguments.ToDictionary(x => x.Key, x => (object?)x.Value, StringComparer.OrdinalIgnoreCase),
             data.RootElement.Clone());
     }
 
@@ -276,11 +276,12 @@ JSON retornado pela API da Câmara:
         }
 
         var builder = new UriBuilder(new Uri(new Uri(baseUrl), relativePath));
-        var filteredQuery = query
-            .Where(x => !string.IsNullOrWhiteSpace(x.Value))
-            .Select(x => new KeyValuePair<string, string>(x.Key, x.Value!));
+        var encodedQuery = string.Join(
+            "&",
+            query
+                .Where(x => !string.IsNullOrWhiteSpace(x.Value))
+                .Select(x => $"{Uri.EscapeDataString(x.Key)}={Uri.EscapeDataString(x.Value!)}"));
 
-        var encodedQuery = new FormUrlEncodedContent(filteredQuery).ReadAsStringAsync().GetAwaiter().GetResult();
         builder.Query = encodedQuery;
         return builder.Uri;
     }
