@@ -57,6 +57,11 @@ public sealed class DirectChatQueryService
 
     private ChatExecutionPlan? TryCreateDirectPlan(string prompt)
     {
+        if (LooksLikeLatestVotingQuery(prompt))
+        {
+            return CreateLatestVotingPlan();
+        }
+
         var deputyNameForVotes = TryExtractDeputyNameForVotes(prompt);
         if (!string.IsNullOrWhiteSpace(deputyNameForVotes))
         {
@@ -76,6 +81,25 @@ public sealed class DirectChatQueryService
         }
 
         return null;
+    }
+
+    private static ChatExecutionPlan CreateLatestVotingPlan()
+    {
+        return new ChatExecutionPlan(
+            Steps:
+            [
+                new ChatExecutionStep(
+                    Tool: "search_votacoes",
+                    Arguments: new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["pagina"] = "1",
+                        ["itens"] = "1",
+                        ["ordem"] = "DESC",
+                        ["ordenarPor"] = "dataHoraRegistro"
+                    },
+                    SaveAs: "votacoes")
+            ],
+            FinalResult: "votacoes");
     }
 
     private ChatExecutionPlan CreateDeputyVotesPlan(string deputyName)
@@ -161,6 +185,28 @@ public sealed class DirectChatQueryService
             FinalResult: "proposicoes");
     }
 
+    private static bool LooksLikeLatestVotingQuery(string prompt)
+    {
+        if (string.IsNullOrWhiteSpace(prompt))
+        {
+            return false;
+        }
+
+        var normalized = NormalizeForMatching(prompt);
+        var mentionsVoting = normalized.Contains("votacao", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("votacoes", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("voto", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("votos", StringComparison.OrdinalIgnoreCase);
+
+        var mentionsLatest = normalized.Contains("ultima", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("ultimas", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("recente", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("recentes", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("mais recente", StringComparison.OrdinalIgnoreCase);
+
+        return mentionsVoting && mentionsLatest;
+    }
+
     private static string? TryExtractPropositionsAuthor(string prompt)
     {
         if (string.IsNullOrWhiteSpace(prompt))
@@ -240,5 +286,11 @@ public sealed class DirectChatQueryService
     {
         var textInfo = CultureInfo.GetCultureInfo("pt-BR").TextInfo;
         return textInfo.ToTitleCase(value.ToLower(CultureInfo.GetCultureInfo("pt-BR")));
+    }
+
+    private static string NormalizeForMatching(string value)
+    {
+        var normalized = value.ToLowerInvariant().Normalize(System.Text.NormalizationForm.FormD);
+        return string.Concat(normalized.Where(character => CharUnicodeInfo.GetUnicodeCategory(character) != UnicodeCategory.NonSpacingMark));
     }
 }
