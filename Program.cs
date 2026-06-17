@@ -118,6 +118,48 @@ try
         chatProvider = GetStringSetting(configuration, "Chat:Provider", "CHAT_PROVIDER", "ollama")
     }));
 
+    app.MapGet("/api/mcp/tools", () => Results.Ok(new[]
+    {
+        new McpDiagnosticTool("search_deputados", "Busca deputados por nome, UF, partido, legislatura e paginação.", ["nome", "siglaUf", "siglaPartido", "idLegislatura", "pagina", "itens"]),
+        new McpDiagnosticTool("get_deputado", "Obtém detalhes de um deputado pelo ID.", ["idDeputado"]),
+        new McpDiagnosticTool("get_deputado_despesas", "Lista despesas de um deputado pelo ID.", ["idDeputado", "pagina", "itens"]),
+        new McpDiagnosticTool("get_deputado_votacoes", "Lista votações de um deputado pelo ID.", ["idDeputado", "pagina", "itens"]),
+        new McpDiagnosticTool("search_proposicoes", "Busca proposições por tipo, número, ano, autor, keywords e paginação.", ["siglaTipo", "numero", "ano", "keywords", "autor", "dataInicio", "dataFim", "pagina", "itens"]),
+        new McpDiagnosticTool("get_proposicao", "Obtém detalhes de uma proposição pelo ID.", ["idProposicao"]),
+        new McpDiagnosticTool("search_eventos", "Busca eventos por data, descrição e paginação.", ["dataInicio", "dataFim", "descricao", "pagina", "itens"]),
+        new McpDiagnosticTool("search_orgaos", "Busca órgãos por sigla, nome e paginação.", ["sigla", "nome", "pagina", "itens"])
+    }));
+
+    app.MapPost("/api/mcp/tools/call", async (
+        McpDiagnosticToolCallRequest request,
+        CamaraToolExecutionService toolExecutionService,
+        ChatResponseFormatterService responseFormatter,
+        ILogger<Program> logger,
+        CancellationToken cancellationToken) =>
+    {
+        if (string.IsNullOrWhiteSpace(request.Name))
+        {
+            return Results.BadRequest(new { error = "O nome da ferramenta é obrigatório." });
+        }
+
+        var arguments = request.Arguments ?? new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+
+        logger.LogInformation(
+            "Executing MCP diagnostic tool call. Tool={Tool}, Arguments={Arguments}",
+            request.Name,
+            arguments);
+
+        var json = await toolExecutionService.ExecuteAsync(request.Name, arguments, cancellationToken);
+        var response = new ChatPromptResponse(
+            "Consulta executada pela tela de diagnóstico MCP.",
+            request.Name,
+            arguments.ToDictionary(item => item.Key, item => (object?)item.Value, StringComparer.OrdinalIgnoreCase),
+            json.RootElement.Clone(),
+            null);
+
+        return Results.Ok(responseFormatter.Format(response));
+    });
+
     app.MapPost(chatEndpoint, async (
         ChatPromptRequest request,
         OpenAiChatService chatService,
