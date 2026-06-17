@@ -197,6 +197,16 @@ Exemplos de prompt:
 - "Procure PLs de 2026 com ementa sobre inteligência artificial."
 - "Liste eventos da Câmara entre 2026-06-01 e 2026-06-16."
 
+## Prompts e encadeamento
+
+A documentação operacional do prompt fica em:
+
+```text
+docs/prompts/tool-chaining.md
+```
+
+Esse documento define o comportamento esperado para resolver IDs com tools `search_*`, consultar sub-recursos com tools `get_*`, respeitar paginação e consolidar respostas sem inventar dados.
+
 ## Encadeamento de ferramentas
 
 As ferramentas seguem o padrão `search_* -> get_*`. Quando o usuário informar apenas nome, sigla, tema ou outro dado parcial, o sistema deve primeiro chamar uma ferramenta de busca para obter o identificador oficial da Câmara. Depois deve chamar a ferramenta específica com esse ID.
