@@ -111,7 +111,7 @@
       border: 1px solid #cbd5e1;
       border-bottom-left-radius: 4px;
       color: #334155;
-      min-width: min(520px, 82%);
+      min-width: min(620px, 82%);
     }
 
     .progress-title {
@@ -135,9 +135,7 @@
       animation: spin 0.8s linear infinite;
     }
 
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
+    @keyframes spin { to { transform: rotate(360deg); } }
 
     .progress-meta {
       color: var(--muted);
@@ -156,26 +154,10 @@
     .progress-list .ok { color: var(--success); }
     .progress-list .fail { color: var(--error); }
 
-    .simple-answer-title {
-      font-weight: 700;
-      margin-bottom: 8px;
-    }
-
-    .simple-answer-list {
-      margin: 0;
-      padding-left: 22px;
-      white-space: normal;
-    }
-
-    .simple-answer-list li {
-      margin: 6px 0;
-    }
-
-    .answer-muted {
-      color: var(--muted);
-      font-size: 13px;
-      margin-top: 8px;
-    }
+    .simple-answer-title { font-weight: 700; margin-bottom: 8px; }
+    .simple-answer-list { margin: 0; padding-left: 22px; white-space: normal; }
+    .simple-answer-list li { margin: 6px 0; }
+    .answer-muted { color: var(--muted); font-size: 13px; margin-top: 8px; }
 
     .error .bubble {
       background: var(--error-bg);
@@ -253,19 +235,19 @@
   <div class="app">
     <header>
       <h1>Chat MCP Brazil Politicians</h1>
-      <p>Faça perguntas em linguagem natural. O backend usa o provedor configurado no appsettings.json.</p>
+      <p>Faça perguntas em linguagem natural. A tela exibe prompt enviado, ferramenta, argumentos e resposta.</p>
     </header>
 
     <div id="status" class="status">Carregando configurações...</div>
     <main id="messages" class="messages"></main>
 
     <form id="chatForm">
-      <textarea id="prompt" rows="1" placeholder="Ex: proposições sobre escala 6x1" autocomplete="off"></textarea>
+      <textarea id="prompt" rows="1" placeholder="Ex: votos de cada deputado na votação 123456" autocomplete="off"></textarea>
       <button id="sendButton" type="submit">Enviar</button>
     </form>
 
     <div class="hint">
-      Exemplos: “Busque deputados do RS”, “Detalhes do deputado 220593”, “Despesas do deputado 220593 em 2024”, “Proposições sobre escala 6x1”.
+      Exemplos: “liste as últimas votações”, “retorne os votos de cada deputado da votação 123456”, “despesas da deputada Erika Hilton”.
     </div>
   </div>
 
@@ -318,15 +300,18 @@
       const prompt = promptEl.value.trim();
       if (!prompt) return;
 
+      const requestPayload = { prompt };
       promptEl.value = "";
       promptEl.style.height = "auto";
       addMessage("user", prompt);
       setBusy(true);
 
-      const progress = addProgressLog(prompt);
+      const progress = addProgressLog(prompt, requestPayload);
 
       try {
-        progress.add("Enviando prompt para " + chatEndpoint + ".");
+        progress.add("Prompt enviado para o backend: " + prompt);
+        progress.add("Payload HTTP enviado: " + JSON.stringify(requestPayload));
+        progress.add("Endpoint chamado: POST " + chatEndpoint + ".");
 
         const estimatedTimers = startEstimatedProgress(progress);
 
@@ -336,14 +321,14 @@
             "Content-Type": "application/json",
             "Accept": "application/json"
           },
-          body: JSON.stringify({ prompt })
+          body: JSON.stringify(requestPayload)
         });
 
         stopEstimatedProgress(estimatedTimers);
-        progress.add("Resposta HTTP recebida: " + response.status + ".");
+        progress.add("Resposta HTTP recebida: " + response.status + " " + response.statusText + ".");
 
         const rawText = await response.text();
-        progress.add("Lendo resposta do backend. Tamanho: " + rawText.length + " caracteres.");
+        progress.add("Resposta bruta recebida. Tamanho: " + rawText.length + " caracteres.");
 
         let payload;
         try {
@@ -356,20 +341,33 @@
 
         if (!response.ok) {
           const message = payload?.detail || payload?.title || payload?.error || rawText || "Erro desconhecido.";
-          progress.fail("Erro retornado pelo backend: " + message);
+          progress.add("Resposta de erro do backend: " + truncateText(message, 500), "fail");
+          progress.addRaw("Resposta bruta do erro", rawText);
+          progress.fail("Erro retornado pelo backend.");
           throw new Error(message);
         }
 
         if (payload?.tool) {
-          progress.add("Ferramenta escolhida: " + payload.tool + ".");
+          progress.add("Tool chamada pelo backend: " + payload.tool + ".");
+        } else {
+          progress.add("Nenhuma tool foi informada na resposta; possivelmente foi resposta direta do modelo.");
         }
 
         if (payload?.arguments) {
-          progress.add("Argumentos usados: " + JSON.stringify(payload.arguments) + ".");
+          progress.add("Argumentos da tool: " + JSON.stringify(payload.arguments) + ".");
         }
 
+        if (payload?.logFilePath) {
+          progress.add("Arquivo de log do prompt no backend: " + payload.logFilePath + ".");
+        }
+
+        if (payload?.answer) {
+          progress.add("Resposta final formatada: " + truncateText(payload.answer, 900));
+        }
+
+        progress.addRaw("Resposta JSON completa", payload);
         progress.done("Processamento concluído.");
-        addAssistantResponse(payload);
+        addAssistantResponse(payload, requestPayload, rawText);
       } catch (error) {
         progress.fail("Falha ao processar o prompt.");
         addMessage("assistant error", "Erro ao processar o prompt.\n\n" + error.message);
@@ -380,37 +378,19 @@
 
     function startEstimatedProgress(progress) {
       const timers = [];
-
-      timers.push(setTimeout(() => {
-        progress.add("Pensando: " + chatProvider + " está analisando a intenção do prompt.");
-      }, 400));
-
-      timers.push(setTimeout(() => {
-        progress.add("Planejando consulta: selecionando ferramenta e normalizando argumentos.");
-      }, 1200));
-
-      timers.push(setTimeout(() => {
-        progress.add("Consultando dados públicos da Câmara dos Deputados.");
-      }, 2400));
-
-      timers.push(setTimeout(() => {
-        progress.add("Gerando resposta final em português com base nos dados retornados.");
-      }, 4200));
-
-      timers.push(setTimeout(() => {
-        progress.add("Ainda processando. Modelos locais podem demorar mais dependendo do hardware.");
-      }, 8000));
-
+      timers.push(setTimeout(() => progress.add("Provider analisando intenção do prompt: " + chatProvider + "."), 400));
+      timers.push(setTimeout(() => progress.add("Planejando consulta e selecionando tool."), 1200));
+      timers.push(setTimeout(() => progress.add("Consultando dados públicos da Câmara dos Deputados."), 2400));
+      timers.push(setTimeout(() => progress.add("Formatando resposta final."), 4200));
+      timers.push(setTimeout(() => progress.add("Ainda processando. Modelos locais podem demorar mais dependendo do hardware."), 8000));
       return timers;
     }
 
     function stopEstimatedProgress(timers) {
-      for (const timer of timers) {
-        clearTimeout(timer);
-      }
+      for (const timer of timers) clearTimeout(timer);
     }
 
-    function addProgressLog(prompt) {
+    function addProgressLog(prompt, requestPayload) {
       const row = document.createElement("div");
       row.className = "message-row progress";
 
@@ -419,7 +399,7 @@
 
       const title = document.createElement("div");
       title.className = "progress-title";
-      title.innerHTML = "<span class=\"spinner\"></span><span>Pensando...</span>";
+      title.innerHTML = "<span class=\"spinner\"></span><span>Executando...</span>";
 
       const meta = document.createElement("div");
       meta.className = "progress-meta";
@@ -427,30 +407,48 @@
       const list = document.createElement("ol");
       list.className = "progress-list";
 
+      const rawDetails = document.createElement("details");
+      const rawSummary = document.createElement("summary");
+      rawSummary.textContent = "Ver log técnico da execução";
+      const rawPre = document.createElement("pre");
+      rawPre.textContent = JSON.stringify({ prompt, requestPayload }, null, 2);
+      rawDetails.appendChild(rawSummary);
+      rawDetails.appendChild(rawPre);
+
       bubble.appendChild(title);
       bubble.appendChild(meta);
       bubble.appendChild(list);
+      bubble.appendChild(rawDetails);
       row.appendChild(bubble);
       messagesEl.appendChild(row);
       messagesEl.scrollTop = messagesEl.scrollHeight;
 
+      const rawLog = [{ etapa: "prompt_ui", timestamp: new Date().toISOString(), prompt, requestPayload }];
       const startedAt = Date.now();
       const elapsedTimer = setInterval(() => {
         meta.textContent = "Tempo decorrido: " + formatElapsed(Date.now() - startedAt) + ". Prompt: “" + truncateText(prompt, 80) + "”";
       }, 250);
 
       const add = (text, cssClass) => {
+        rawLog.push({ etapa: "log", timestamp: new Date().toISOString(), text });
         const item = document.createElement("li");
         if (cssClass) item.className = cssClass;
         item.textContent = timestamp() + " " + text;
         list.appendChild(item);
+        rawPre.textContent = JSON.stringify(rawLog, null, 2);
         messagesEl.scrollTop = messagesEl.scrollHeight;
+      };
+
+      const addRaw = (label, value) => {
+        rawLog.push({ etapa: label, timestamp: new Date().toISOString(), value });
+        rawPre.textContent = JSON.stringify(rawLog, null, 2);
       };
 
       add("Prompt recebido pela interface.");
 
       return {
         add,
+        addRaw,
         done: text => {
           clearInterval(elapsedTimer);
           title.className = "progress-title done";
@@ -468,120 +466,75 @@
       };
     }
 
-    function addAssistantResponse(payload) {
+    function addAssistantResponse(payload, requestPayload, rawText) {
       const answerHtml = buildReadableAnswerHtml(payload);
       const details = JSON.stringify({
-        tool: payload?.tool,
-        arguments: payload?.arguments,
-        data: payload?.data,
-        rawAnswer: payload?.answer
+        promptEnviado: requestPayload?.prompt,
+        endpoint: chatEndpoint,
+        provider: chatProvider,
+        toolChamada: payload?.tool,
+        argumentosDaTool: payload?.arguments,
+        respostaFormatada: payload?.answer,
+        dadosRetornados: payload?.data,
+        arquivoLogBackend: payload?.logFilePath,
+        respostaBrutaHttp: rawText
       }, null, 2);
 
       const html = answerHtml +
-        "<details><summary>Ver dados da consulta</summary><pre>" + escapeHtml(details) + "</pre></details>";
+        "<details><summary>Ver prompt, tool e resposta</summary><pre>" + escapeHtml(details) + "</pre></details>";
 
       addMessageHtml("assistant", html);
     }
 
     function buildReadableAnswerHtml(payload) {
       const camaraData = payload?.data?.dados;
-
-      if (payload?.tool === "search_deputados" && Array.isArray(camaraData)) {
-        return renderDeputadosList(camaraData, payload?.arguments);
-      }
-
+      if (payload?.tool === "search_deputados" && Array.isArray(camaraData)) return renderDeputadosList(camaraData, payload?.arguments);
       const parsedAnswer = parseJsonLikeAnswer(payload?.answer);
-      if (Array.isArray(parsedAnswer)) {
-        return renderGenericObjectList(parsedAnswer);
-      }
-
+      if (Array.isArray(parsedAnswer)) return renderGenericObjectList(parsedAnswer);
       return renderPlainText(payload?.answer || "Sem resposta.");
     }
 
     function renderDeputadosList(deputados, args) {
       const sorted = [...deputados].sort((a, b) => String(a?.nome || "").localeCompare(String(b?.nome || ""), "pt-BR"));
-
-      if (sorted.length === 0) {
-        return "<p>Não encontrei deputados com os filtros usados.</p>";
-      }
-
+      if (sorted.length === 0) return "<p>Não encontrei deputados com os filtros usados.</p>";
       const titleParts = [];
       if (args?.siglaUf) titleParts.push("UF " + args.siglaUf);
       if (args?.siglaPartido) titleParts.push("partido " + args.siglaPartido);
-
-      const title = titleParts.length > 0
-        ? "Deputados encontrados — " + titleParts.join(", ")
-        : "Deputados encontrados";
-
+      const title = titleParts.length > 0 ? "Deputados encontrados — " + titleParts.join(", ") : "Deputados encontrados";
       const items = sorted.map(item => {
         const nome = escapeHtml(item?.nome || "Sem nome");
         const partido = item?.siglaPartido ? " — " + escapeHtml(item.siglaPartido) : "";
         const uf = item?.siglaUf ? "/" + escapeHtml(item.siglaUf) : "";
         return "<li><strong>" + nome + "</strong>" + partido + uf + "</li>";
       }).join("");
-
-      return "<div class=\"simple-answer-title\">" + escapeHtml(title) + "</div>" +
-        "<ol class=\"simple-answer-list\">" + items + "</ol>" +
-        "<div class=\"answer-muted\">Resultado ordenado alfabeticamente pelo nome, com base nos dados retornados pela Câmara.</div>";
+      return "<div class=\"simple-answer-title\">" + escapeHtml(title) + "</div><ol class=\"simple-answer-list\">" + items + "</ol><div class=\"answer-muted\">Resultado ordenado alfabeticamente pelo nome.</div>";
     }
 
     function renderGenericObjectList(items) {
-      if (items.length === 0) {
-        return "<p>Nenhum item encontrado.</p>";
-      }
-
+      if (items.length === 0) return "<p>Nenhum item encontrado.</p>";
       const normalizedItems = items.map(item => typeof item === "object" && item !== null ? item : { valor: item });
-
-      const sorted = [...normalizedItems].sort((a, b) => {
-        const left = String(a.nome || a.name || a.titulo || a.valor || "");
-        const right = String(b.nome || b.name || b.titulo || b.valor || "");
-        return left.localeCompare(right, "pt-BR");
-      });
-
+      const sorted = [...normalizedItems].sort((a, b) => String(a.nome || a.name || a.titulo || a.valor || "").localeCompare(String(b.nome || b.name || b.titulo || b.valor || ""), "pt-BR"));
       const htmlItems = sorted.map(item => {
         const label = item.nome || item.name || item.titulo || item.valor || JSON.stringify(item);
-        const details = Object.entries(item)
-          .filter(([key]) => !["nome", "name", "titulo", "valor"].includes(key))
-          .map(([key, value]) => key + ": " + value)
-          .join(" — ");
-
+        const details = Object.entries(item).filter(([key]) => !["nome", "name", "titulo", "valor"].includes(key)).map(([key, value]) => key + ": " + value).join(" — ");
         return "<li><strong>" + escapeHtml(label) + "</strong>" + (details ? " — " + escapeHtml(details) : "") + "</li>";
       }).join("");
-
-      return "<div class=\"simple-answer-title\">Resultado</div>" +
-        "<ol class=\"simple-answer-list\">" + htmlItems + "</ol>" +
-        "<div class=\"answer-muted\">A resposta original veio em JSON, então a interface converteu para lista simples.</div>";
+      return "<div class=\"simple-answer-title\">Resultado</div><ol class=\"simple-answer-list\">" + htmlItems + "</ol>";
     }
 
     function renderPlainText(text) {
       const cleanText = stripMarkdownJsonFence(text);
       const parsed = parseJsonLikeAnswer(cleanText);
-
-      if (Array.isArray(parsed)) {
-        return renderGenericObjectList(parsed);
-      }
-
+      if (Array.isArray(parsed)) return renderGenericObjectList(parsed);
       return "<div>" + escapeHtml(cleanText).replace(/\n/g, "<br>") + "</div>";
     }
 
     function parseJsonLikeAnswer(value) {
       const text = stripMarkdownJsonFence(value).trim();
       if (!text) return null;
-
-      const startIndex = Math.min(
-        text.indexOf("[") === -1 ? Number.MAX_SAFE_INTEGER : text.indexOf("["),
-        text.indexOf("{") === -1 ? Number.MAX_SAFE_INTEGER : text.indexOf("{")
-      );
-
+      const startIndex = Math.min(text.indexOf("[") === -1 ? Number.MAX_SAFE_INTEGER : text.indexOf("["), text.indexOf("{") === -1 ? Number.MAX_SAFE_INTEGER : text.indexOf("{"));
       if (startIndex === Number.MAX_SAFE_INTEGER) return null;
-
-      const candidate = text.substring(startIndex).trim();
-      try {
-        const parsed = JSON.parse(candidate);
-        return parsed;
-      } catch {
-        return null;
-      }
+      try { return JSON.parse(text.substring(startIndex).trim()); } catch { return null; }
     }
 
     function stripMarkdownJsonFence(value) {
@@ -591,18 +544,14 @@
       return text.trim();
     }
 
-    function addMessage(type, text) {
-      addMessageHtml(type, escapeHtml(text));
-    }
+    function addMessage(type, text) { addMessageHtml(type, escapeHtml(text)); }
 
     function addMessageHtml(type, html) {
       const row = document.createElement("div");
       row.className = "message-row " + type;
-
       const bubble = document.createElement("div");
       bubble.className = "bubble";
       bubble.innerHTML = html;
-
       row.appendChild(bubble);
       messagesEl.appendChild(row);
       messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -615,11 +564,7 @@
     }
 
     function timestamp() {
-      return new Date().toLocaleTimeString("pt-BR", {
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit"
-      });
+      return new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
     }
 
     function formatElapsed(milliseconds) {
