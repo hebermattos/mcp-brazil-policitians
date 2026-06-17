@@ -59,7 +59,7 @@ public sealed class OpenAiChatService
 Você é um planejador de ferramentas para um sistema que consulta a API de Dados Abertos da Câmara dos Deputados.
 Responda exclusivamente com JSON válido, sem markdown.
 
-Escolha uma ferramenta:
+Escolha exatamente uma destas ferramentas, sem alterar o nome:
 - search_deputados: buscar deputados. Argumentos: nome, siglaUf, siglaPartido, idLegislatura, pagina, itens.
 - get_deputado: detalhe de deputado por idDeputado.
 - search_proposicoes: buscar proposições. Argumentos: siglaTipo, numero, ano, ementa, autor, dataInicio, dataFim, pagina, itens.
@@ -68,6 +68,7 @@ Escolha uma ferramenta:
 - search_orgaos: buscar órgãos/comissões. Argumentos: sigla, nome, pagina, itens.
 
 Regras:
+- Para perguntas sobre deputados, deputadas, parlamentares, partido ou deputados por partido, use search_deputados.
 - Para perguntas sobre projetos de lei, PEC, MP, proposições, assuntos legislativos ou temas como escala 6x1, use search_proposicoes.
 - Para perguntas sobre deputados/parlamentares, use search_deputados, exceto quando houver id e o usuário pedir detalhes.
 - Use itens no máximo {{defaultItems}}.
@@ -75,6 +76,7 @@ Regras:
 - Quando o usuário informar UF, use siglaUf com duas letras maiúsculas.
 - Quando o usuário informar ano, use ano numérico.
 - Quando buscar por assunto de proposição, coloque o assunto principal em ementa.
+- Nunca retorne nomes inventados como search_depetados, search_deputado_list ou deputados_search.
 
 Formato obrigatório:
 {
@@ -93,7 +95,7 @@ Formato obrigatório:
         {
             using var json = JsonDocument.Parse(content);
             var root = json.RootElement;
-            var tool = root.GetProperty("tool").GetString();
+            var tool = NormalizeToolName(root.GetProperty("tool").GetString());
 
             if (string.IsNullOrWhiteSpace(tool))
             {
@@ -194,6 +196,7 @@ Formato obrigatório:
 Você é um assistente que responde em português do Brasil usando dados públicos da Câmara dos Deputados.
 Use somente os dados fornecidos no JSON. Não invente nomes, IDs, partidos, datas ou resultados.
 Quando houver lista de itens, resuma os mais relevantes em formato legível.
+Quando o usuário pedir agrupamento, como deputados por partido, agrupe os itens disponíveis no JSON e deixe claro que o resultado considera apenas os dados retornados pela consulta.
 Quando não houver resultado, diga que não encontrou resultados com os filtros usados.
 Se útil, informe qual consulta foi executada.
 """;
@@ -442,6 +445,55 @@ JSON retornado pela API da Câmara:
 
         builder.Query = encodedQuery;
         return builder.Uri;
+    }
+
+    private static string? NormalizeToolName(string? tool)
+    {
+        if (string.IsNullOrWhiteSpace(tool))
+        {
+            return tool;
+        }
+
+        var normalized = tool.Trim().ToLowerInvariant().Replace('-', '_');
+
+        return normalized switch
+        {
+            "search_depetados" => "search_deputados",
+            "search_deputado" => "search_deputados",
+            "deputados_search" => "search_deputados",
+            "buscar_deputados" => "search_deputados",
+            "listar_deputados" => "search_deputados",
+            "deputados" => "search_deputados",
+
+            "get_deputados" => "get_deputado",
+            "deputado" => "get_deputado",
+            "detalhe_deputado" => "get_deputado",
+
+            "search_proposicao" => "search_proposicoes",
+            "buscar_proposicoes" => "search_proposicoes",
+            "listar_proposicoes" => "search_proposicoes",
+            "proposicoes" => "search_proposicoes",
+            "proposições" => "search_proposicoes",
+
+            "get_proposicoes" => "get_proposicao",
+            "proposicao" => "get_proposicao",
+            "proposição" => "get_proposicao",
+            "detalhe_proposicao" => "get_proposicao",
+
+            "search_evento" => "search_eventos",
+            "buscar_eventos" => "search_eventos",
+            "eventos" => "search_eventos",
+
+            "search_orgaos" => "search_orgaos",
+            "search_órgãos" => "search_orgaos",
+            "buscar_orgaos" => "search_orgaos",
+            "orgaos" => "search_orgaos",
+            "órgãos" => "search_orgaos",
+            "comissoes" => "search_orgaos",
+            "comissões" => "search_orgaos",
+
+            _ => normalized
+        };
     }
 
     private static string Required(IReadOnlyDictionary<string, string?> args, string key)
