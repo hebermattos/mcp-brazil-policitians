@@ -60,7 +60,10 @@ try
         });
     });
 
-    builder.Services.AddHttpClient();
+    builder.Services.AddTransient<ProviderPromptLoggingHandler>();
+    builder.Services
+        .AddHttpClient(string.Empty)
+        .AddHttpMessageHandler<ProviderPromptLoggingHandler>();
     builder.Services.AddSingleton<PromptFileLogService>();
     builder.Services.AddSingleton<ChatResponseFormatterService>();
     builder.Services.AddScoped<OpenAiChatService>();
@@ -127,9 +130,9 @@ try
         logger.LogInformation("Chat endpoint received prompt. PromptLength={PromptLength}", request.Prompt.Length);
         logger.LogInformation(
             """
-            ================= PROMPT ENVIADO AO PROVIDER =================
+            ================= PROMPT RECEBIDO DA TELA =================
             {Prompt}
-            ==============================================================
+            ===========================================================
             """,
             request.Prompt);
 
