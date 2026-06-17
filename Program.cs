@@ -77,6 +77,7 @@ try
     builder.Services.AddSingleton<PromptFileLogService>();
     builder.Services.AddSingleton<ChatResponseFormatterService>();
     builder.Services.AddScoped<CamaraJsonPathResolver>();
+    builder.Services.AddScoped<CamaraApiClient>();
     builder.Services.AddScoped<CamaraToolExecutionService>();
     builder.Services.AddScoped<ChatPlanExecutorService>();
     builder.Services.AddScoped<LatestPropositionVotingQueryService>();
