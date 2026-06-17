@@ -125,6 +125,13 @@ try
         }
 
         logger.LogInformation("Chat endpoint received prompt. PromptLength={PromptLength}", request.Prompt.Length);
+        logger.LogInformation(
+            """
+            ================= PROMPT ENVIADO AO PROVIDER =================
+            {Prompt}
+            ==============================================================
+            """,
+            request.Prompt);
 
         try
         {
