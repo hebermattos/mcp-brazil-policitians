@@ -54,6 +54,7 @@ public sealed class ChatResponseFormatterService
             "search_deputados" => FormatDeputados(dados, arguments),
             "search_proposicoes" => FormatProposicoes(dados, arguments),
             "get_deputado_despesas" => FormatDespesas(dados, arguments),
+            "get_deputado_votacoes" => FormatVotacoes(dados, arguments),
             "search_eventos" => FormatGenericList("Eventos encontrados", dados),
             "search_orgaos" => FormatGenericList("Órgãos encontrados", dados),
             _ => FormatGenericData(dados)
@@ -194,6 +195,49 @@ public sealed class ChatResponseFormatterService
             if (!string.IsNullOrWhiteSpace(item.UrlDocumento)) builder.AppendLine().Append("   Documento: ").Append(item.UrlDocumento);
 
             builder.AppendLine();
+        }
+
+        return builder.ToString().Trim();
+    }
+
+    private static string FormatVotacoes(JsonElement dados, IReadOnlyDictionary<string, object?>? arguments)
+    {
+        if (dados.ValueKind != JsonValueKind.Array || dados.GetArrayLength() == 0)
+        {
+            return "Não encontrei votações com os filtros usados.";
+        }
+
+        var items = dados
+            .EnumerateArray()
+            .Select(item => new
+            {
+                Data = GetString(item, "dataHoraRegistro") ?? GetString(item, "dataHora"),
+                Voto = GetString(item, "voto") ?? GetString(item, "tipoVoto"),
+                Descricao = GetString(item, "descricao") ?? GetString(item, "titulo"),
+                SiglaOrgao = GetString(item, "siglaOrgao"),
+                IdVotacao = GetString(item, "id") ?? GetString(item, "idVotacao")
+            })
+            .ToList();
+
+        var builder = new StringBuilder();
+        builder.Append("Votações encontradas");
+        if (TryGetArgument(arguments, "nome", out var nome)) builder.Append(" — ").Append(nome);
+        if (TryGetArgument(arguments, "idDeputado", out var idDeputado)) builder.Append(" — ID ").Append(idDeputado);
+        builder.AppendLine();
+        builder.AppendLine();
+        builder.AppendLine("| # | Data | Voto | Órgão | Proposição/Votação |");
+        builder.AppendLine("|---:|---|---|---|---|");
+
+        for (var i = 0; i < items.Count; i++)
+        {
+            var item = items[i];
+            builder
+                .Append("| ").Append(i + 1)
+                .Append(" | ").Append(EscapeMarkdownTable(FormatDate(item.Data ?? string.Empty)))
+                .Append(" | ").Append(EscapeMarkdownTable(item.Voto ?? "não informado"))
+                .Append(" | ").Append(EscapeMarkdownTable(item.SiglaOrgao ?? string.Empty))
+                .Append(" | ").Append(EscapeMarkdownTable(SingleLine(item.Descricao ?? item.IdVotacao ?? string.Empty)))
+                .AppendLine(" |");
         }
 
         return builder.ToString().Trim();
@@ -389,6 +433,11 @@ public sealed class ChatResponseFormatterService
         }
 
         return amount.ToString("C", CultureInfo.GetCultureInfo("pt-BR"));
+    }
+
+    private static string EscapeMarkdownTable(string value)
+    {
+        return value.Replace("|", "\\|").Trim();
     }
 
     private static int? TryParseInt(string? value)
