@@ -81,7 +81,7 @@ try
     builder.Services.AddScoped<ChatPlanExecutorService>();
     builder.Services.AddScoped<LatestPropositionVotingQueryService>();
     builder.Services.AddScoped<DirectChatQueryService>();
-    builder.Services.AddScoped<OpenAiChatService>();
+    builder.Services.AddScoped<ChainedOpenAiChatService>();
 
     builder.Services
         .AddMcpServer()
@@ -168,7 +168,7 @@ try
 
     app.MapPost(chatEndpoint, async (
         ChatPromptRequest request,
-        OpenAiChatService chatService,
+        ChainedOpenAiChatService chatService,
         LatestPropositionVotingQueryService latestPropositionVotingQueryService,
         DirectChatQueryService directQueryService,
         ChatResponseFormatterService responseFormatter,
