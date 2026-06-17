@@ -1,7 +1,9 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using McpBrazilPoliticians.Models;
 
 namespace McpBrazilPoliticians.Services;
@@ -12,8 +14,13 @@ public sealed class OpenAiChatService
     private const string DefaultOpenAiBaseUrl = "https://api.openai.com/v1/";
     private const string DefaultOpenAiModel = "gpt-4.1-mini";
     private const string DefaultOllamaBaseUrl = "http://localhost:11434";
-    private const string DefaultOllamaModel = "llama3.1:8b";
+    private const string DefaultOllamaModel = "llama3.2:1B";
     private const string DefaultCamaraBaseUrl = "https://dadosabertos.camara.leg.br/api/v2/";
+
+    private static readonly HashSet<string> KnownPropositionTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "PL", "PLP", "PEC", "MPV", "PDL", "PRC", "PLV", "MSC", "REQ", "RIC", "INC", "RCP", "PDC", "SBT", "EMC"
+    };
 
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IConfiguration _configuration;
@@ -101,6 +108,22 @@ public sealed class OpenAiChatService
         var defaultItems = GetInt("Chat:DefaultSearchItems", "CHAT_DEFAULT_SEARCH_ITEMS", 10, 1, 100);
         var defaultPage = GetInt("Chat:DefaultSearchPage", "CHAT_DEFAULT_SEARCH_PAGE", 1, 1, 10000);
 
+        if (TryCreateDeterministicToolPlan(prompt, defaultItems, defaultPage, out var deterministicPlan))
+        {
+            _logger.LogInformation(
+                "Using deterministic tool plan. Tool={Tool}, Arguments={Arguments}",
+                deterministicPlan.Tool,
+                JsonSerializer.Serialize(deterministicPlan.Arguments, _jsonOptions));
+
+            _promptFileLogService.Append(promptLog, "tool-plan.deterministic", new
+            {
+                deterministicPlan.Tool,
+                deterministicPlan.Arguments
+            });
+
+            return deterministicPlan;
+        }
+
         var systemPrompt = $$"""
 Você é um planejador de ferramentas para a API de Dados Abertos da Câmara.
 Responda apenas JSON válido, sem markdown.
@@ -108,7 +131,7 @@ Responda apenas JSON válido, sem markdown.
 Ferramentas permitidas e argumentos permitidos:
 - search_deputados: nome, siglaUf, siglaPartido, idLegislatura, pagina, itens.
 - get_deputado: idDeputado.
-- search_proposicoes: siglaTipo, numero, ano, ementa, autor, dataInicio, dataFim, pagina, itens.
+- search_proposicoes: siglaTipo, numero, ano, keywords, autor, dataInicio, dataFim, pagina, itens.
 - get_proposicao: idProposicao.
 - search_eventos: dataInicio, dataFim, descricao, pagina, itens.
 - search_orgaos: sigla, nome, pagina, itens.
@@ -116,15 +139,17 @@ Ferramentas permitidas e argumentos permitidos:
 Regras:
 - Para deputados, parlamentares, partido ou deputados por partido, use search_deputados.
 - Para projetos de lei, PEC, MP, proposições ou temas legislativos, use search_proposicoes.
+- Para busca por assunto de proposição, use keywords. Nunca use ementa.
 - Use pagina {{defaultPage}} e itens no máximo {{defaultItems}} quando o usuário não informar.
 - Para UF use siglaUf. Para partido use siglaPartido.
+- Não invente autor, dataInicio, dataFim, siglaTipo, numero ou ano quando o usuário não informar explicitamente.
 - Nunca crie nomes de ferramentas ou argumentos fora da lista permitida.
 
 Formato:
 {
-  "tool": "search_deputados",
+  "tool": "search_proposicoes",
   "arguments": {
-    "siglaUf": "RS",
+    "keywords": "escala 6x1",
     "pagina": {{defaultPage}},
     "itens": {{defaultItems}}
   }
@@ -190,6 +215,7 @@ Formato:
             }
 
             var normalizedArgs = NormalizeArguments(tool, rawArgs);
+            normalizedArgs = RemoveHallucinatedArguments(tool, normalizedArgs, prompt);
 
             _logger.LogInformation(
                 "Tool plan normalized. RawTool={RawTool}, Tool={Tool}, RawArguments={RawArguments}, NormalizedArguments={NormalizedArguments}",
@@ -623,6 +649,62 @@ JSON retornado pela API da Câmara:
 
     private static string EnsureTrailingSlash(string value) => value.EndsWith('/') ? value : value + "/";
 
+    private static bool TryCreateDeterministicToolPlan(string prompt, int defaultItems, int defaultPage, out ToolPlan plan)
+    {
+        var normalizedPrompt = NormalizePromptText(prompt);
+        var args = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["pagina"] = defaultPage.ToString(CultureInfo.InvariantCulture),
+            ["itens"] = defaultItems.ToString(CultureInfo.InvariantCulture)
+        };
+
+        if (LooksLikeDeputadosSearch(normalizedPrompt))
+        {
+            var uf = ExtractBrazilianStateUf(prompt);
+            if (!string.IsNullOrWhiteSpace(uf))
+            {
+                args["siglaUf"] = uf;
+            }
+
+            var partido = ExtractParty(prompt);
+            if (!string.IsNullOrWhiteSpace(partido))
+            {
+                args["siglaPartido"] = partido;
+            }
+
+            plan = new ToolPlan("search_deputados", NormalizeArguments("search_deputados", args));
+            return true;
+        }
+
+        if (LooksLikeProposicoesSearch(normalizedPrompt))
+        {
+            var subject = ExtractSubjectKeywords(prompt);
+            if (!string.IsNullOrWhiteSpace(subject))
+            {
+                args["keywords"] = subject;
+            }
+
+            var typeAndNumber = ExtractPropositionTypeAndNumber(prompt);
+            if (typeAndNumber is not null)
+            {
+                args["siglaTipo"] = typeAndNumber.Value.Type;
+                args["numero"] = typeAndNumber.Value.Number;
+            }
+
+            var year = ExtractYear(prompt);
+            if (!string.IsNullOrWhiteSpace(year))
+            {
+                args["ano"] = year;
+            }
+
+            plan = new ToolPlan("search_proposicoes", NormalizeArguments("search_proposicoes", args));
+            return true;
+        }
+
+        plan = new ToolPlan(string.Empty, EmptyQuery());
+        return false;
+    }
+
     private static string? NormalizeToolName(string? tool)
     {
         if (string.IsNullOrWhiteSpace(tool))
@@ -654,10 +736,78 @@ JSON retornado pela API da Câmara:
                 continue;
             }
 
-            result[name] = NormalizeArgumentValue(name, argument.Value);
+            var value = NormalizeArgumentValue(name, argument.Value);
+            if (!IsValidArgumentValue(name, value))
+            {
+                continue;
+            }
+
+            result[name] = value;
         }
 
         return result;
+    }
+
+    private static Dictionary<string, string?> RemoveHallucinatedArguments(string tool, Dictionary<string, string?> arguments, string prompt)
+    {
+        if (!tool.Equals("search_proposicoes", StringComparison.OrdinalIgnoreCase))
+        {
+            return arguments;
+        }
+
+        var promptText = NormalizePromptText(prompt);
+        var result = new Dictionary<string, string?>(arguments, StringComparer.OrdinalIgnoreCase);
+
+        RemoveIfValueNotInPrompt(result, "autor", promptText);
+        RemoveIfValueNotInPrompt(result, "siglaTipo", promptText);
+        RemoveIfValueNotInPrompt(result, "numero", promptText);
+        RemoveIfValueNotInPrompt(result, "ano", promptText);
+
+        if (result.TryGetValue("dataInicio", out var dataInicio) && !PromptMentionsYearOrDate(promptText, dataInicio))
+        {
+            result.Remove("dataInicio");
+        }
+
+        if (result.TryGetValue("dataFim", out var dataFim) && !PromptMentionsYearOrDate(promptText, dataFim))
+        {
+            result.Remove("dataFim");
+        }
+
+        if (!result.ContainsKey("keywords"))
+        {
+            var subject = ExtractSubjectKeywords(prompt);
+            if (!string.IsNullOrWhiteSpace(subject))
+            {
+                result["keywords"] = subject;
+            }
+        }
+
+        return result;
+    }
+
+    private static void RemoveIfValueNotInPrompt(Dictionary<string, string?> arguments, string key, string normalizedPrompt)
+    {
+        if (!arguments.TryGetValue(key, out var value) || string.IsNullOrWhiteSpace(value))
+        {
+            return;
+        }
+
+        var normalizedValue = NormalizePromptText(value);
+        if (!normalizedPrompt.Contains(normalizedValue, StringComparison.OrdinalIgnoreCase))
+        {
+            arguments.Remove(key);
+        }
+    }
+
+    private static bool PromptMentionsYearOrDate(string normalizedPrompt, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var yearMatch = Regex.Match(value, @"\b(19|20)\d{2}\b");
+        return yearMatch.Success && normalizedPrompt.Contains(yearMatch.Value, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string? NormalizeArgumentName(string tool, string name)
@@ -684,8 +834,8 @@ JSON retornado pela API da Câmara:
             {
                 "siglatipo" or "tipo" => "siglaTipo",
                 "numero" or "number" => "numero",
-                "ano" or "year" => "ano",
-                "ementa" or "assunto" or "tema" or "texto" or "query" or "q" => "ementa",
+                "ano" or "anho" or "year" => "ano",
+                "keywords" or "keyword" or "palavraschave" or "palavrachave" or "ementa" or "assunto" or "tema" or "texto" or "query" or "q" => "keywords",
                 "autor" or "author" => "autor",
                 "datainicio" or "inicio" or "startdate" => "dataInicio",
                 "datafim" or "fim" or "enddate" => "dataFim",
@@ -722,7 +872,100 @@ JSON retornado pela API da Câmara:
     private static string NormalizeArgumentValue(string name, string value)
     {
         var cleanValue = value.Trim();
-        return name is "siglaUf" or "siglaPartido" or "siglaTipo" or "sigla" ? cleanValue.ToUpperInvariant() : cleanValue;
+        return name switch
+        {
+            "siglaUf" or "siglaPartido" or "siglaTipo" or "sigla" => cleanValue.ToUpperInvariant(),
+            "dataInicio" or "dataFim" => NormalizeDate(cleanValue),
+            _ => cleanValue
+        };
+    }
+
+    private static bool IsValidArgumentValue(string name, string value)
+    {
+        return name switch
+        {
+            "siglaTipo" => KnownPropositionTypes.Contains(value),
+            "numero" => Regex.IsMatch(value, "^[0-9]+$"),
+            "ano" => Regex.IsMatch(value, "^(19|20)[0-9]{2}$"),
+            "dataInicio" or "dataFim" => Regex.IsMatch(value, "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"),
+            "pagina" or "itens" or "idDeputado" or "idProposicao" or "idLegislatura" => Regex.IsMatch(value, "^[0-9]+$"),
+            _ => true
+        };
+    }
+
+    private static string NormalizeDate(string value)
+    {
+        var formats = new[] { "yyyy-MM-dd", "dd/MM/yyyy", "d/M/yyyy" };
+        return DateTime.TryParseExact(value, formats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var date)
+            ? date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+            : value;
+    }
+
+    private static bool LooksLikeDeputadosSearch(string normalizedPrompt)
+    {
+        return normalizedPrompt.Contains("deputado", StringComparison.OrdinalIgnoreCase)
+            || normalizedPrompt.Contains("deputada", StringComparison.OrdinalIgnoreCase)
+            || normalizedPrompt.Contains("parlamentar", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool LooksLikeProposicoesSearch(string normalizedPrompt)
+    {
+        return normalizedPrompt.Contains("proposicao", StringComparison.OrdinalIgnoreCase)
+            || normalizedPrompt.Contains("proposicoes", StringComparison.OrdinalIgnoreCase)
+            || normalizedPrompt.Contains("projeto", StringComparison.OrdinalIgnoreCase)
+            || Regex.IsMatch(normalizedPrompt, @"\b(pl|plp|pec|mpv|pdl|prc|req)\b", RegexOptions.IgnoreCase);
+    }
+
+    private static string? ExtractSubjectKeywords(string prompt)
+    {
+        var normalized = Regex.Replace(prompt.Trim(), "\\s+", " ");
+        var match = Regex.Match(normalized, @"\b(?:sobre|acerca de|relacionad[ao]s? a|com tema)\b\s+(?<subject>.+)$", RegexOptions.IgnoreCase);
+        var subject = match.Success ? match.Groups["subject"].Value : normalized;
+
+        subject = Regex.Replace(subject, @"\b(?:retorne|retornar|liste|listar|mostre|mostrar|busque|buscar|procure|procurar)\b.*$", string.Empty, RegexOptions.IgnoreCase).Trim();
+        subject = Regex.Replace(subject, @"^(?:a|o|as|os|de|da|do|das|dos)\s+", string.Empty, RegexOptions.IgnoreCase).Trim();
+
+        return string.IsNullOrWhiteSpace(subject) ? null : subject;
+    }
+
+    private static string? ExtractBrazilianStateUf(string prompt)
+    {
+        var match = Regex.Match(prompt, @"\b(AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO)\b", RegexOptions.IgnoreCase);
+        return match.Success ? match.Value.ToUpperInvariant() : null;
+    }
+
+    private static string? ExtractParty(string prompt)
+    {
+        var match = Regex.Match(prompt, @"\b(PT|PL|MDB|PSD|PP|PSB|PSOL|NOVO|REPUBLICANOS|UNIÃO|UNIAO|PDT|PCDOB|PV|PSDB|CIDADANIA|AVANTE|SOLIDARIEDADE|PODE|PODEMOS|PRD)\b", RegexOptions.IgnoreCase);
+        return match.Success ? match.Value.ToUpperInvariant().Replace("UNIÃO", "UNIAO") : null;
+    }
+
+    private static (string Type, string Number)? ExtractPropositionTypeAndNumber(string prompt)
+    {
+        var match = Regex.Match(prompt, @"\b(?<type>PLP|PEC|MPV|PDL|PRC|REQ|PL)\s*(?<number>[0-9]+)\b", RegexOptions.IgnoreCase);
+        return match.Success
+            ? (match.Groups["type"].Value.ToUpperInvariant(), match.Groups["number"].Value)
+            : null;
+    }
+
+    private static string? ExtractYear(string prompt)
+    {
+        var match = Regex.Match(prompt, @"\b(19|20)[0-9]{2}\b");
+        return match.Success ? match.Value : null;
+    }
+
+    private static string NormalizePromptText(string value)
+    {
+        var normalized = value.Trim().ToLowerInvariant();
+        normalized = normalized
+            .Replace("á", "a").Replace("à", "a").Replace("ã", "a").Replace("â", "a")
+            .Replace("é", "e").Replace("ê", "e")
+            .Replace("í", "i")
+            .Replace("ó", "o").Replace("õ", "o").Replace("ô", "o")
+            .Replace("ú", "u")
+            .Replace("ç", "c");
+
+        return Regex.Replace(normalized, "\\s+", " ");
     }
 
     private static string Required(IReadOnlyDictionary<string, string?> args, string key)
