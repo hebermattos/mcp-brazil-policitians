@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using McpBrazilPoliticians.Models;
@@ -52,6 +53,7 @@ public sealed class ChatResponseFormatterService
         {
             "search_deputados" => FormatDeputados(dados, arguments),
             "search_proposicoes" => FormatProposicoes(dados, arguments),
+            "get_deputado_despesas" => FormatDespesas(dados, arguments),
             "search_eventos" => FormatGenericList("Eventos encontrados", dados),
             "search_orgaos" => FormatGenericList("Órgãos encontrados", dados),
             _ => FormatGenericData(dados)
@@ -132,6 +134,7 @@ public sealed class ChatResponseFormatterService
         var builder = new StringBuilder();
         builder.Append("Proposições encontradas");
         if (TryGetArgument(arguments, "keywords", out var keywords)) builder.Append(" — ").Append(keywords);
+        if (TryGetArgument(arguments, "autor", out var autor)) builder.Append(" — autor: ").Append(autor);
         builder.AppendLine();
         builder.AppendLine();
 
@@ -146,6 +149,50 @@ public sealed class ChatResponseFormatterService
             if (!string.IsNullOrWhiteSpace(item.Id)) builder.Append(" — ID ").Append(item.Id);
             if (!string.IsNullOrWhiteSpace(item.Data)) builder.Append(" — ").Append(FormatDate(item.Data));
             if (!string.IsNullOrWhiteSpace(item.Ementa)) builder.AppendLine().Append("   ").Append(SingleLine(item.Ementa));
+            builder.AppendLine();
+        }
+
+        return builder.ToString().Trim();
+    }
+
+    private static string FormatDespesas(JsonElement dados, IReadOnlyDictionary<string, object?>? arguments)
+    {
+        if (dados.ValueKind != JsonValueKind.Array || dados.GetArrayLength() == 0)
+        {
+            return "Não encontrei despesas com os filtros usados.";
+        }
+
+        var items = dados
+            .EnumerateArray()
+            .Select(item => new
+            {
+                Data = GetString(item, "dataDocumento"),
+                TipoDespesa = GetString(item, "tipoDespesa"),
+                Fornecedor = GetString(item, "nomeFornecedor"),
+                Valor = GetString(item, "valorDocumento") ?? GetString(item, "valorLiquido"),
+                UrlDocumento = GetString(item, "urlDocumento")
+            })
+            .ToList();
+
+        var builder = new StringBuilder();
+        builder.Append("Despesas encontradas");
+        if (TryGetArgument(arguments, "nome", out var nome)) builder.Append(" — ").Append(nome);
+        if (TryGetArgument(arguments, "idDeputado", out var idDeputado)) builder.Append(" — ID ").Append(idDeputado);
+        builder.AppendLine();
+        builder.AppendLine();
+
+        for (var i = 0; i < items.Count; i++)
+        {
+            var item = items[i];
+            builder.Append(i + 1).Append(". ");
+
+            if (!string.IsNullOrWhiteSpace(item.Data)) builder.Append(FormatDate(item.Data)).Append(" — ");
+            builder.Append(string.IsNullOrWhiteSpace(item.TipoDespesa) ? "Despesa" : item.TipoDespesa);
+
+            if (!string.IsNullOrWhiteSpace(item.Fornecedor)) builder.Append(" — ").Append(item.Fornecedor);
+            if (!string.IsNullOrWhiteSpace(item.Valor)) builder.Append(" — ").Append(FormatCurrency(item.Valor));
+            if (!string.IsNullOrWhiteSpace(item.UrlDocumento)) builder.AppendLine().Append("   Documento: ").Append(item.UrlDocumento);
+
             builder.AppendLine();
         }
 
@@ -331,6 +378,17 @@ public sealed class ChatResponseFormatterService
         return DateTimeOffset.TryParse(value, out var date)
             ? date.ToString("dd/MM/yyyy")
             : value;
+    }
+
+    private static string FormatCurrency(string value)
+    {
+        if (!decimal.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out var amount)
+            && !decimal.TryParse(value, NumberStyles.Any, CultureInfo.GetCultureInfo("pt-BR"), out amount))
+        {
+            return value;
+        }
+
+        return amount.ToString("C", CultureInfo.GetCultureInfo("pt-BR"));
     }
 
     private static int? TryParseInt(string? value)
