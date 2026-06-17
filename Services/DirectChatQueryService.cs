@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using McpBrazilPoliticians.Models;
 
@@ -19,21 +21,29 @@ public sealed class DirectChatQueryService
         RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private readonly ChatPlanExecutorService _planExecutorService;
+    private readonly CamaraToolExecutionService _toolExecutionService;
     private readonly IConfiguration _configuration;
     private readonly ILogger<DirectChatQueryService> _logger;
 
     public DirectChatQueryService(
         ChatPlanExecutorService planExecutorService,
+        CamaraToolExecutionService toolExecutionService,
         IConfiguration configuration,
         ILogger<DirectChatQueryService> logger)
     {
         _planExecutorService = planExecutorService;
+        _toolExecutionService = toolExecutionService;
         _configuration = configuration;
         _logger = logger;
     }
 
     public async Task<ChatPromptResponse?> TryHandleAsync(string prompt, CancellationToken cancellationToken)
     {
+        if (LooksLikeVotesByDeputyFromLatestVotingsQuery(prompt))
+        {
+            return await GetVotesFromLatestVotingsAsync(prompt, cancellationToken);
+        }
+
         var plan = TryCreateDirectPlan(prompt);
         if (plan is null)
         {
@@ -52,6 +62,100 @@ public sealed class DirectChatQueryService
             executedPlan.FinalTool,
             executedPlan.FinalArguments,
             executedPlan.FinalData,
+            null);
+    }
+
+    private async Task<ChatPromptResponse> GetVotesFromLatestVotingsAsync(string prompt, CancellationToken cancellationToken)
+    {
+        var votingCount = ExtractRequestedCount(prompt, defaultValue: 5, min: 1, max: 10);
+        var maxVotesPerVoting = GetInt("Chat:DefaultVoteItems", "CHAT_DEFAULT_VOTE_ITEMS", 100, 1, 100);
+
+        var searchArguments = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["pagina"] = "1",
+            ["itens"] = votingCount.ToString(CultureInfo.InvariantCulture),
+            ["ordem"] = "DESC",
+            ["ordenarPor"] = "dataHoraRegistro"
+        };
+
+        _logger.LogInformation(
+            "Executing fan-out query for votes from latest votings. VotingCount={VotingCount}, MaxVotesPerVoting={MaxVotesPerVoting}",
+            votingCount,
+            maxVotesPerVoting);
+
+        using var votingsJson = await _toolExecutionService.ExecuteAsync("search_votacoes", searchArguments, cancellationToken);
+        var combinedVotes = new JsonArray();
+        var votingSummaries = new JsonArray();
+
+        if (votingsJson.RootElement.TryGetProperty("dados", out var votings) && votings.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var voting in votings.EnumerateArray())
+            {
+                var votingId = GetString(voting, "id");
+                if (string.IsNullOrWhiteSpace(votingId))
+                {
+                    continue;
+                }
+
+                var votingDescription = GetString(voting, "descricao") ?? GetString(voting, "titulo");
+                var votingDate = GetString(voting, "dataHoraRegistro") ?? GetString(voting, "dataHora") ?? GetString(voting, "data");
+                var votingOrg = GetString(voting, "siglaOrgao") ?? GetNestedString(voting, "orgao", "sigla");
+
+                votingSummaries.Add(new JsonObject
+                {
+                    ["idVotacao"] = votingId,
+                    ["dataVotacao"] = votingDate,
+                    ["siglaOrgao"] = votingOrg,
+                    ["descricao"] = votingDescription
+                });
+
+                using var votesJson = await _toolExecutionService.ExecuteAsync(
+                    "get_votacao_votos",
+                    new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["idVotacao"] = votingId,
+                        ["pagina"] = "1",
+                        ["itens"] = maxVotesPerVoting.ToString(CultureInfo.InvariantCulture)
+                    },
+                    cancellationToken);
+
+                if (!votesJson.RootElement.TryGetProperty("dados", out var votes) || votes.ValueKind != JsonValueKind.Array)
+                {
+                    continue;
+                }
+
+                foreach (var vote in votes.EnumerateArray())
+                {
+                    var voteNode = JsonNode.Parse(vote.GetRawText())?.AsObject() ?? [];
+                    voteNode["idVotacaoOrigem"] = votingId;
+                    voteNode["dataVotacaoOrigem"] = votingDate;
+                    voteNode["siglaOrgaoOrigem"] = votingOrg;
+                    voteNode["descricaoVotacaoOrigem"] = votingDescription;
+                    combinedVotes.Add(voteNode);
+                }
+            }
+        }
+
+        var root = new JsonObject
+        {
+            ["dados"] = combinedVotes,
+            ["votacoesConsultadas"] = votingSummaries
+        };
+
+        using var combinedJson = JsonDocument.Parse(root.ToJsonString());
+        var arguments = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["quantidadeVotacoes"] = votingCount.ToString(CultureInfo.InvariantCulture),
+            ["itensPorVotacao"] = maxVotesPerVoting.ToString(CultureInfo.InvariantCulture),
+            ["ordem"] = "DESC",
+            ["ordenarPor"] = "dataHoraRegistro"
+        };
+
+        return new ChatPromptResponse(
+            "Consulta direta de votos das últimas votações.",
+            "get_votacao_votos",
+            arguments,
+            combinedJson.RootElement.Clone(),
             null);
     }
 
@@ -185,6 +289,30 @@ public sealed class DirectChatQueryService
             FinalResult: "proposicoes");
     }
 
+    private static bool LooksLikeVotesByDeputyFromLatestVotingsQuery(string prompt)
+    {
+        if (string.IsNullOrWhiteSpace(prompt))
+        {
+            return false;
+        }
+
+        var normalized = NormalizeForMatching(prompt);
+        var mentionsVotes = normalized.Contains("votos", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("voto", StringComparison.OrdinalIgnoreCase);
+        var mentionsDeputy = normalized.Contains("deputado", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("deputados", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("parlamentar", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("parlamentares", StringComparison.OrdinalIgnoreCase);
+        var mentionsLatestVotings = normalized.Contains("ultimas", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("ultimos", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("recentes", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("mais recentes", StringComparison.OrdinalIgnoreCase);
+        var mentionsVotings = normalized.Contains("votacoes", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("votacao", StringComparison.OrdinalIgnoreCase);
+
+        return mentionsVotes && mentionsDeputy && mentionsLatestVotings && mentionsVotings;
+    }
+
     private static bool LooksLikeLatestVotingQuery(string prompt)
     {
         if (string.IsNullOrWhiteSpace(prompt))
@@ -280,6 +408,41 @@ public sealed class DirectChatQueryService
         return int.TryParse(rawValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value)
             ? Math.Clamp(value, min, max)
             : defaultValue;
+    }
+
+    private static int ExtractRequestedCount(string prompt, int defaultValue, int min, int max)
+    {
+        var match = Regex.Match(prompt, @"\b(?<count>\d{1,2})\b");
+        if (!match.Success || !int.TryParse(match.Groups["count"].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var count))
+        {
+            return defaultValue;
+        }
+
+        return Math.Clamp(count, min, max);
+    }
+
+    private static string? GetString(JsonElement item, string propertyName)
+    {
+        if (!item.TryGetProperty(propertyName, out var property))
+        {
+            return null;
+        }
+
+        return property.ValueKind switch
+        {
+            JsonValueKind.String => property.GetString(),
+            JsonValueKind.Number => property.GetRawText(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            _ => null
+        };
+    }
+
+    private static string? GetNestedString(JsonElement item, string objectName, string propertyName)
+    {
+        return item.TryGetProperty(objectName, out var nested) && nested.ValueKind == JsonValueKind.Object
+            ? GetString(nested, propertyName)
+            : null;
     }
 
     private static string ToTitleCase(string value)
