@@ -14,6 +14,10 @@ public sealed class DirectChatQueryService
         @"\b(?:despesas?|gastos?|cotas?|reembolsos?)\s+(?:d[ao]s?\s+)?(?:deputad[ao]|parlamentar)\s+(?<name>.+)$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    private static readonly Regex VotesByDeputyRegex = new(
+        @"\b(?:vota[cç][oõ]es|votos?|votou|favor|contra)\b.*\b(?:d[ao]s?\s+)?(?:deputad[ao]|parlamentar)\s+(?<name>.+)$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     private readonly ChatPlanExecutorService _planExecutorService;
     private readonly IConfiguration _configuration;
     private readonly ILogger<DirectChatQueryService> _logger;
@@ -53,6 +57,12 @@ public sealed class DirectChatQueryService
 
     private ChatExecutionPlan? TryCreateDirectPlan(string prompt)
     {
+        var deputyNameForVotes = TryExtractDeputyNameForVotes(prompt);
+        if (!string.IsNullOrWhiteSpace(deputyNameForVotes))
+        {
+            return CreateDeputyVotesPlan(deputyNameForVotes);
+        }
+
         var deputyNameForExpenses = TryExtractDeputyNameForExpenses(prompt);
         if (!string.IsNullOrWhiteSpace(deputyNameForExpenses))
         {
@@ -66,6 +76,37 @@ public sealed class DirectChatQueryService
         }
 
         return null;
+    }
+
+    private ChatExecutionPlan CreateDeputyVotesPlan(string deputyName)
+    {
+        var page = GetInt("Chat:DefaultSearchPage", "CHAT_DEFAULT_SEARCH_PAGE", 1, 1, 10000);
+        var items = GetInt("Chat:DefaultSearchItems", "CHAT_DEFAULT_SEARCH_ITEMS", 10, 1, 100);
+
+        return new ChatExecutionPlan(
+            Steps:
+            [
+                new ChatExecutionStep(
+                    Tool: "search_deputados",
+                    Arguments: new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["nome"] = deputyName,
+                        ["pagina"] = "1",
+                        ["itens"] = "1"
+                    },
+                    SaveAs: "deputado"),
+                new ChatExecutionStep(
+                    Tool: "get_deputado_votacoes",
+                    Arguments: new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["idDeputado"] = "{{deputado.dados[0].id}}",
+                        ["nome"] = "{{deputado.dados[0].nome}}",
+                        ["pagina"] = page.ToString(CultureInfo.InvariantCulture),
+                        ["itens"] = items.ToString(CultureInfo.InvariantCulture)
+                    },
+                    SaveAs: "votacoes")
+            ],
+            FinalResult: "votacoes");
     }
 
     private ChatExecutionPlan CreateDeputyExpensesPlan(string deputyName)
@@ -152,6 +193,27 @@ public sealed class DirectChatQueryService
         }
 
         return CleanPersonName(match.Groups["name"].Value);
+    }
+
+    private static string? TryExtractDeputyNameForVotes(string prompt)
+    {
+        if (string.IsNullOrWhiteSpace(prompt))
+        {
+            return null;
+        }
+
+        var normalizedPrompt = Regex.Replace(prompt.Trim(), "\\s+", " ");
+        var match = VotesByDeputyRegex.Match(normalizedPrompt);
+        if (!match.Success)
+        {
+            return null;
+        }
+
+        var name = match.Groups["name"].Value;
+        name = Regex.Replace(name, @"\b(?:se\s+)?votou\s+a\s+favor\s+ou\s+contra\b.*$", string.Empty, RegexOptions.IgnoreCase).Trim();
+        name = Regex.Replace(name, @"\b(?:a\s+favor|contra)\b.*$", string.Empty, RegexOptions.IgnoreCase).Trim();
+
+        return CleanPersonName(name);
     }
 
     private static string? CleanPersonName(string value)
