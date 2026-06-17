@@ -1,31 +1,22 @@
-# MCP tool chaining prompt notes
+# Prompt de encadeamento das tools MCP da Câmara
 
-Este documento descreve o comportamento esperado do planejador de ferramentas do projeto.
-
-## Objetivo
-
-O assistente deve responder perguntas usando ferramentas MCP que consultam a API JSON da Câmara dos Deputados.
+Este servidor dá acesso aos Dados Abertos da Câmara dos Deputados do Brasil por meio de tools MCP que encapsulam a API RESTful v2.
 
 Base REST equivalente:
 
+```text
 https://dadosabertos.camara.leg.br/api/v2/
+```
 
-As chamadas devem ser tratadas como JSON, usando `Accept: application/json` ou `?formato=json` quando a URL REST equivalente for exibida.
+Use as tools para responder perguntas sobre deputados, proposições, votações, despesas parlamentares, discursos, eventos, partidos, blocos, frentes, órgãos e legislaturas. As respostas das tools devem ser tratadas como JSON.
 
-## Regra principal
+## Princípio central: encadeamento
 
-Use chamadas encadeadas quando uma pergunta depender de um identificador.
-
-Fluxo padrão:
-
-1. Usar uma ferramenta `search_*` para encontrar a entidade.
-2. Extrair o identificador oficial retornado pela API.
-3. Usar esse identificador em uma ferramenta `get_*` ou em um sub-recurso.
-4. Consolidar os dados retornados.
+Os recursos da API se relacionam por identificadores oficiais. Quando o usuário informar apenas nome, sigla, tema, número, ano ou outro filtro parcial, primeiro resolva a entidade usando uma tool `search_*`. Depois use o ID retornado em uma tool `get_*` ou em um sub-recurso.
 
 Nunca invente IDs.
 
-## IDs que não devem ser inventados
+Nunca chute:
 
 - `idDeputado`
 - `idProposicao`
@@ -38,68 +29,93 @@ Nunca invente IDs.
 - `idBloco`
 - `idLegislatura`
 
-## Ferramentas de descoberta
+Números e anos de proposições só devem ser usados como filtros quando forem informados pelo usuário ou retornados por uma chamada anterior.
 
-- `search_deputados`
-- `search_proposicoes`
-- `search_votacoes`
-- `search_eventos`
-- `search_orgaos`
-- `search_partidos`
-- `search_frentes`
-- `search_grupos`
-- `search_blocos`
-- `search_legislaturas`
-- `search_referencias`
+## Mapa de tools
 
-## Ferramentas por identificador
+### Deputados
 
-- `get_deputado`
-- `get_deputado_despesas`
-- `get_deputado_discursos`
-- `get_deputado_eventos`
-- `get_deputado_orgaos`
-- `get_deputado_frentes`
-- `get_deputado_profissoes`
-- `get_deputado_votacoes`
-- `get_proposicao`
-- `get_proposicao_autores`
-- `get_proposicao_tramitacoes`
-- `get_proposicao_temas`
-- `get_proposicao_votacoes`
-- `get_proposicao_relacionadas`
-- `get_votacao`
-- `get_votacao_votos`
-- `get_votacao_orientacoes`
-- `get_evento`
-- `get_evento_orgaos`
-- `get_evento_requerimentos`
-- `get_evento_votacoes`
-- `get_orgao`
-- `get_orgao_eventos`
-- `get_orgao_membros`
-- `get_orgao_votacoes`
-- `get_partido`
-- `get_partido_membros`
-- `get_frente`
-- `get_frente_membros`
-- `get_grupo`
-- `get_grupo_membros`
-- `get_bloco`
-- `get_legislatura`
+- `search_deputados`: busca deputados por `nome`, `siglaPartido`, `siglaUf`, `idLegislatura`, `pagina`, `itens`.
+- `get_deputado`: detalhe de deputado por `idDeputado`.
+- `get_deputado_despesas`: despesas parlamentares por `idDeputado`, com filtros `ano`, `mes`, `ordenarPor`, `ordem`, `pagina`, `itens`.
+- `get_deputado_discursos`: discursos por `idDeputado`.
+- `get_deputado_eventos`: eventos por `idDeputado`.
+- `get_deputado_orgaos`: órgãos/comissões do deputado por `idDeputado`.
+- `get_deputado_frentes`: frentes parlamentares do deputado por `idDeputado`.
+- `get_deputado_profissoes`: profissões declaradas por `idDeputado`.
+- `get_deputado_votacoes`: votações associadas ao deputado por `idDeputado`.
 
-## Paginação
+### Proposições
 
-Use `itens` com valor máximo 100 e controle `pagina` quando a resposta puder ter muitos itens.
+- `search_proposicoes`: busca proposições por `siglaTipo`, `numero`, `ano`, `keywords`, `autor`, `dataInicio`, `dataFim`, `pagina`, `itens`.
+- `get_proposicao`: detalhe de proposição por `idProposicao`.
+- `get_proposicao_autores`: autores da proposição.
+- `get_proposicao_tramitacoes`: tramitações da proposição.
+- `get_proposicao_temas`: temas da proposição.
+- `get_proposicao_votacoes`: votações da proposição.
+- `get_proposicao_relacionadas`: proposições relacionadas.
 
-Quando a pergunta exigir totalização ou comparação, continue consultando páginas até obter dados suficientes ou informe que a resposta está limitada.
+### Votações
+
+- `search_votacoes`: busca votações por `dataInicio`, `dataFim`, `idOrgao`, `siglaUf`, `pagina`, `itens`.
+- `get_votacao`: detalhe de votação por `idVotacao`.
+- `get_votacao_votos`: votos individuais de uma votação.
+- `get_votacao_orientacoes`: orientações de partidos/blocos em uma votação.
+
+### Eventos e órgãos
+
+- `search_eventos`: busca eventos por `dataInicio`, `dataFim`, `descricao`, `idOrgao`, `pagina`, `itens`.
+- `get_evento`: detalhe de evento por `idEvento`.
+- `get_evento_orgaos`: órgãos relacionados ao evento.
+- `get_evento_requerimentos`: requerimentos relacionados ao evento.
+- `get_evento_votacoes`: votações relacionadas ao evento.
+- `search_orgaos`: busca órgãos por `sigla`, `nome`, `tipoOrgao`, `pagina`, `itens`.
+- `get_orgao`: detalhe de órgão por `idOrgao`.
+- `get_orgao_eventos`: eventos de um órgão.
+- `get_orgao_membros`: membros de um órgão.
+- `get_orgao_votacoes`: votações de um órgão.
+
+### Outros recursos
+
+- `search_partidos`, `get_partido`, `get_partido_membros`.
+- `search_frentes`, `get_frente`, `get_frente_membros`.
+- `search_grupos`, `get_grupo`, `get_grupo_membros`.
+- `search_blocos`, `get_bloco`.
+- `search_legislaturas`, `get_legislatura`.
+- `search_referencias`: tabelas de domínio, como tipos, situações, temas e siglas.
+- `camara_api_get`: fallback genérico para caminhos relativos da API v2. Use apenas quando nenhuma tool específica atender.
+
+## Regras de uso das tools
+
+1. Resolva nomes, siglas, temas ou filtros parciais antes de acessar sub-recursos por ID.
+2. Se uma busca retornar mais de um resultado, use critérios como nome, nome civil, partido, UF, situação, tipo, número, ano, ementa e data para escolher o resultado mais provável. Se ainda houver ambiguidade, retorne as opções encontradas em vez de escolher arbitrariamente.
+3. Respeite paginação: use `itens` com valor máximo 100, use `pagina` e avance pelas páginas seguintes quando o total for importante para a resposta.
+4. Use filtros da API sempre que possível: `ano` e `mes` para despesas; `dataInicio` e `dataFim` para recortes temporais; `ordenarPor` e `ordem` para ordenação.
+5. Faça chamadas independentes em paralelo quando o executor permitir. Faça chamadas sequenciais quando uma depender do ID retornado pela anterior.
+6. Se um ID não for encontrado, uma lista vier vazia ou um dado não existir, diga isso explicitamente. Não preencha lacunas com suposições.
+
+## Padrões de cadeia frequentes
+
+| Caso | Fluxo |
+| --- | --- |
+| Gasto de um deputado | `search_deputados -> get_deputado_despesas` |
+| Como partidos votaram em uma proposição | `search_proposicoes -> get_proposicao_votacoes -> get_votacao_orientacoes` |
+| Quem de um partido votou contra em uma votação | `get_votacao_votos + search_partidos -> get_partido_membros -> cruzar dados` |
+| Autores de uma proposição por tema | `search_proposicoes -> get_proposicao_autores` |
+| Tramitação de uma proposição | `search_proposicoes -> get_proposicao_tramitacoes` |
+| Eventos de um órgão | `search_orgaos -> get_orgao_eventos` |
 
 ## Resposta final
 
-A resposta final deve incluir:
+Ao concluir, entregue uma resposta consolidada em português do Brasil.
 
-1. Resumo direto.
-2. Dados principais.
-3. Filtros usados.
-4. Ferramentas chamadas.
-5. URLs REST equivalentes, quando útil.
+Inclua, quando útil:
+
+- resumo direto;
+- dados principais em lista ou tabela;
+- filtros aplicados;
+- paginação ou limitações;
+- tools consultadas;
+- URLs REST equivalentes.
+
+Não invente dados. Não use arquivos estáticos de download para essas consultas.
