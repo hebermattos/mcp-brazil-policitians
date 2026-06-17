@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -30,15 +31,47 @@ public sealed class OpenAiChatService
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(prompt);
 
-        var plan = await CreateToolPlanAsync(prompt, cancellationToken);
-        using var data = await ExecuteCamaraToolAsync(plan, cancellationToken);
-        var answer = await CreateFinalAnswerAsync(prompt, plan, data, cancellationToken);
+        var operationId = Guid.NewGuid().ToString("N");
+        using var scope = _logger.BeginScope(new Dictionary<string, object?>
+        {
+            ["ChatOperationId"] = operationId
+        });
 
-        return new ChatPromptResponse(
-            answer,
-            plan.Tool,
-            plan.Arguments.ToDictionary(x => x.Key, x => (object?)x.Value, StringComparer.OrdinalIgnoreCase),
-            data.RootElement.Clone());
+        var stopwatch = Stopwatch.StartNew();
+        var provider = GetProvider();
+
+        _logger.LogInformation(
+            "Chat request started. Provider={Provider}, PromptLength={PromptLength}, Prompt={Prompt}",
+            provider,
+            prompt.Length,
+            GetOptionalLogText("Logging:Chat:IncludePromptContent", "LOG_CHAT_INCLUDE_PROMPT_CONTENT", prompt));
+
+        try
+        {
+            var plan = await CreateToolPlanAsync(prompt, cancellationToken);
+            using var data = await ExecuteCamaraToolAsync(plan, cancellationToken);
+            var answer = await CreateFinalAnswerAsync(prompt, plan, data, cancellationToken);
+
+            stopwatch.Stop();
+            _logger.LogInformation(
+                "Chat request completed. Provider={Provider}, Tool={Tool}, Arguments={Arguments}, ElapsedMs={ElapsedMs}",
+                provider,
+                plan.Tool,
+                JsonSerializer.Serialize(plan.Arguments, _jsonOptions),
+                stopwatch.ElapsedMilliseconds);
+
+            return new ChatPromptResponse(
+                answer,
+                plan.Tool,
+                plan.Arguments.ToDictionary(x => x.Key, x => (object?)x.Value, StringComparer.OrdinalIgnoreCase),
+                data.RootElement.Clone());
+        }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+            _logger.LogError(ex, "Chat request failed. Provider={Provider}, ElapsedMs={ElapsedMs}", provider, stopwatch.ElapsedMilliseconds);
+            throw;
+        }
     }
 
     private async Task<ToolPlan> CreateToolPlanAsync(string prompt, CancellationToken cancellationToken)
@@ -76,20 +109,31 @@ Formato:
 }
 """;
 
+        _logger.LogInformation(
+            "Creating tool plan. Provider={Provider}, ForceJson=true, DefaultPage={DefaultPage}, DefaultItems={DefaultItems}",
+            GetProvider(),
+            defaultPage,
+            defaultItems);
+
         var content = await CallChatModelAsync(systemPrompt, prompt, forceJson: true, cancellationToken);
+
+        _logger.LogInformation(
+            "Raw tool plan returned by model. Content={Content}",
+            GetOptionalLogText("Logging:Chat:IncludeModelResponses", "LOG_CHAT_INCLUDE_MODEL_RESPONSES", content));
 
         try
         {
             using var json = JsonDocument.Parse(content);
             var root = json.RootElement;
-            var tool = NormalizeToolName(root.GetProperty("tool").GetString());
+            var rawTool = root.GetProperty("tool").GetString();
+            var tool = NormalizeToolName(rawTool);
 
             if (string.IsNullOrWhiteSpace(tool))
             {
                 throw new InvalidOperationException("O modelo não retornou a ferramenta a ser chamada.");
             }
 
-            var args = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+            var rawArgs = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
             if (root.TryGetProperty("arguments", out var argsElement) && argsElement.ValueKind == JsonValueKind.Object)
             {
                 foreach (var property in argsElement.EnumerateObject())
@@ -97,22 +141,31 @@ Formato:
                     var value = ConvertJsonElementToString(property.Value);
                     if (!string.IsNullOrWhiteSpace(value))
                     {
-                        args[property.Name] = value;
+                        rawArgs[property.Name] = value;
                     }
                 }
             }
 
             if (tool.StartsWith("search_", StringComparison.OrdinalIgnoreCase))
             {
-                args.TryAdd("pagina", defaultPage.ToString());
-                args.TryAdd("itens", defaultItems.ToString());
+                rawArgs.TryAdd("pagina", defaultPage.ToString());
+                rawArgs.TryAdd("itens", defaultItems.ToString());
             }
 
-            return new ToolPlan(tool, NormalizeArguments(tool, args));
+            var normalizedArgs = NormalizeArguments(tool, rawArgs);
+
+            _logger.LogInformation(
+                "Tool plan normalized. RawTool={RawTool}, Tool={Tool}, RawArguments={RawArguments}, NormalizedArguments={NormalizedArguments}",
+                rawTool,
+                tool,
+                JsonSerializer.Serialize(rawArgs, _jsonOptions),
+                JsonSerializer.Serialize(normalizedArgs, _jsonOptions));
+
+            return new ToolPlan(tool, normalizedArgs);
         }
         catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
         {
-            _logger.LogWarning(ex, "Invalid tool plan returned by model: {Content}", content);
+            _logger.LogWarning(ex, "Invalid tool plan returned by model. Content={Content}", content);
             throw new InvalidOperationException("Não foi possível interpretar o plano de ferramenta retornado pelo modelo.", ex);
         }
     }
@@ -124,15 +177,38 @@ Formato:
         var timeoutSeconds = GetInt("CamaraApi:TimeoutSeconds", "CAMARA_API_TIMEOUT_SECONDS", 30, 1, 300);
         var requestUri = BuildUri(baseUrl, path, query);
 
+        _logger.LogInformation(
+            "Calling Camara API. Tool={Tool}, Path={Path}, Query={Query}, Url={Url}, TimeoutSeconds={TimeoutSeconds}",
+            plan.Tool,
+            path,
+            JsonSerializer.Serialize(query, _jsonOptions),
+            requestUri,
+            timeoutSeconds);
+
         using var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
+        var stopwatch = Stopwatch.StartNew();
         var httpClient = _httpClientFactory.CreateClient();
         using var response = await SendAsyncWithTimeout(httpClient, request, timeoutSeconds, cancellationToken);
         var responseText = await response.Content.ReadAsStringAsync(cancellationToken);
+        stopwatch.Stop();
+
+        _logger.LogInformation(
+            "Camara API response received. StatusCode={StatusCode}, ElapsedMs={ElapsedMs}, BodyLength={BodyLength}, Body={Body}",
+            (int)response.StatusCode,
+            stopwatch.ElapsedMilliseconds,
+            responseText.Length,
+            GetOptionalLogText("Logging:Chat:IncludeCamaraResponseBody", "LOG_CHAT_INCLUDE_CAMARA_RESPONSE_BODY", responseText));
 
         if (!response.IsSuccessStatusCode)
         {
+            _logger.LogWarning(
+                "Camara API returned non-success status. StatusCode={StatusCode}, Url={Url}, Body={Body}",
+                (int)response.StatusCode,
+                requestUri,
+                TruncateForLog(responseText));
+
             throw new InvalidOperationException($"Erro HTTP {(int)response.StatusCode} ao consultar a API da Câmara: {responseText}");
         }
 
@@ -189,7 +265,20 @@ JSON retornado pela API da Câmara:
 {dataJson}
 """;
 
-        return await CallChatModelAsync(systemPrompt, userContent, forceJson: false, cancellationToken);
+        _logger.LogInformation(
+            "Creating final answer. Tool={Tool}, DataJsonLength={DataJsonLength}, MaxDataJsonChars={MaxDataJsonChars}",
+            plan.Tool,
+            dataJson.Length,
+            maxChars);
+
+        var answer = await CallChatModelAsync(systemPrompt, userContent, forceJson: false, cancellationToken);
+
+        _logger.LogInformation(
+            "Final answer generated. AnswerLength={AnswerLength}, Answer={Answer}",
+            answer.Length,
+            GetOptionalLogText("Logging:Chat:IncludeModelResponses", "LOG_CHAT_INCLUDE_MODEL_RESPONSES", answer));
+
+        return answer;
     }
 
     private Task<string> CallChatModelAsync(string systemPrompt, string userPrompt, bool forceJson, CancellationToken cancellationToken)
@@ -210,9 +299,13 @@ JSON retornado pela API da Câmara:
             throw new InvalidOperationException("Configure Chat:OpenAI:ApiKey no appsettings.json antes de usar OpenAI.");
         }
 
+        var model = GetString("Chat:OpenAI:Model", "OPENAI_MODEL", DefaultOpenAiModel);
+        var endpoint = BuildOpenAiEndpoint(GetString("Chat:OpenAI:BaseUrl", "OPENAI_BASE_URL", DefaultOpenAiBaseUrl));
+        var timeoutSeconds = GetInt("Chat:OpenAI:TimeoutSeconds", "OPENAI_TIMEOUT_SECONDS", 60, 1, 300);
+
         var payload = new Dictionary<string, object?>
         {
-            ["model"] = GetString("Chat:OpenAI:Model", "OPENAI_MODEL", DefaultOpenAiModel),
+            ["model"] = model,
             ["messages"] = new object[]
             {
                 new { role = "system", content = systemPrompt },
@@ -225,16 +318,33 @@ JSON retornado pela API da Câmara:
             payload["response_format"] = new { type = "json_object" };
         }
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, BuildOpenAiEndpoint(GetString("Chat:OpenAI:BaseUrl", "OPENAI_BASE_URL", DefaultOpenAiBaseUrl)));
+        _logger.LogInformation(
+            "Calling OpenAI chat model. Endpoint={Endpoint}, Model={Model}, ForceJson={ForceJson}, TimeoutSeconds={TimeoutSeconds}, UserPromptLength={UserPromptLength}",
+            endpoint,
+            model,
+            forceJson,
+            timeoutSeconds,
+            userPrompt.Length);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         request.Content = new StringContent(JsonSerializer.Serialize(payload, _jsonOptions), Encoding.UTF8, "application/json");
 
+        var stopwatch = Stopwatch.StartNew();
         var httpClient = _httpClientFactory.CreateClient();
-        using var response = await SendAsyncWithTimeout(httpClient, request, GetInt("Chat:OpenAI:TimeoutSeconds", "OPENAI_TIMEOUT_SECONDS", 60, 1, 300), cancellationToken);
+        using var response = await SendAsyncWithTimeout(httpClient, request, timeoutSeconds, cancellationToken);
         var responseText = await response.Content.ReadAsStringAsync(cancellationToken);
+        stopwatch.Stop();
+
+        _logger.LogInformation(
+            "OpenAI response received. StatusCode={StatusCode}, ElapsedMs={ElapsedMs}, BodyLength={BodyLength}",
+            (int)response.StatusCode,
+            stopwatch.ElapsedMilliseconds,
+            responseText.Length);
 
         if (!response.IsSuccessStatusCode)
         {
+            _logger.LogWarning("OpenAI returned non-success status. StatusCode={StatusCode}, Body={Body}", (int)response.StatusCode, TruncateForLog(responseText));
             throw new InvalidOperationException($"Erro HTTP {(int)response.StatusCode} ao chamar a OpenAI: {responseText}");
         }
 
@@ -245,9 +355,14 @@ JSON retornado pela API da Câmara:
 
     private async Task<string> CallOllamaChatAsync(string systemPrompt, string userPrompt, bool forceJson, CancellationToken cancellationToken)
     {
+        var model = GetString("Chat:Ollama:Model", "OLLAMA_MODEL", DefaultOllamaModel);
+        var endpoint = BuildOllamaEndpoint(GetString("Chat:Ollama:BaseUrl", "OLLAMA_BASE_URL", DefaultOllamaBaseUrl));
+        var timeoutSeconds = GetInt("Chat:Ollama:TimeoutSeconds", "OLLAMA_TIMEOUT_SECONDS", 120, 1, 600);
+        var useJsonFormat = GetBool("Chat:Ollama:UseJsonFormat", "OLLAMA_USE_JSON_FORMAT", true);
+
         var payload = new Dictionary<string, object?>
         {
-            ["model"] = GetString("Chat:Ollama:Model", "OLLAMA_MODEL", DefaultOllamaModel),
+            ["model"] = model,
             ["stream"] = false,
             ["messages"] = new object[]
             {
@@ -256,20 +371,39 @@ JSON retornado pela API da Câmara:
             }
         };
 
-        if (forceJson && GetBool("Chat:Ollama:UseJsonFormat", "OLLAMA_USE_JSON_FORMAT", true))
+        if (forceJson && useJsonFormat)
         {
             payload["format"] = "json";
         }
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, BuildOllamaEndpoint(GetString("Chat:Ollama:BaseUrl", "OLLAMA_BASE_URL", DefaultOllamaBaseUrl)));
+        _logger.LogInformation(
+            "Calling Ollama chat model. Endpoint={Endpoint}, Model={Model}, ForceJson={ForceJson}, UseJsonFormat={UseJsonFormat}, TimeoutSeconds={TimeoutSeconds}, UserPromptLength={UserPromptLength}",
+            endpoint,
+            model,
+            forceJson,
+            useJsonFormat,
+            timeoutSeconds,
+            userPrompt.Length);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
         request.Content = new StringContent(JsonSerializer.Serialize(payload, _jsonOptions), Encoding.UTF8, "application/json");
 
+        var stopwatch = Stopwatch.StartNew();
         var httpClient = _httpClientFactory.CreateClient();
-        using var response = await SendAsyncWithTimeout(httpClient, request, GetInt("Chat:Ollama:TimeoutSeconds", "OLLAMA_TIMEOUT_SECONDS", 120, 1, 600), cancellationToken);
+        using var response = await SendAsyncWithTimeout(httpClient, request, timeoutSeconds, cancellationToken);
         var responseText = await response.Content.ReadAsStringAsync(cancellationToken);
+        stopwatch.Stop();
+
+        _logger.LogInformation(
+            "Ollama response received. StatusCode={StatusCode}, ElapsedMs={ElapsedMs}, BodyLength={BodyLength}, Body={Body}",
+            (int)response.StatusCode,
+            stopwatch.ElapsedMilliseconds,
+            responseText.Length,
+            GetOptionalLogText("Logging:Chat:IncludeModelResponses", "LOG_CHAT_INCLUDE_MODEL_RESPONSES", responseText));
 
         if (!response.IsSuccessStatusCode)
         {
+            _logger.LogWarning("Ollama returned non-success status. StatusCode={StatusCode}, Body={Body}", (int)response.StatusCode, TruncateForLog(responseText));
             throw new InvalidOperationException($"Erro HTTP {(int)response.StatusCode} ao chamar o Ollama: {responseText}");
         }
 
@@ -316,6 +450,17 @@ JSON retornado pela API da Câmara:
     {
         var rawValue = GetString(configurationKey, environmentKey, defaultValue.ToString());
         return bool.TryParse(rawValue, out var value) ? value : defaultValue;
+    }
+
+    private string? GetOptionalLogText(string configurationKey, string environmentKey, string value)
+    {
+        return GetBool(configurationKey, environmentKey, true) ? TruncateForLog(value) : null;
+    }
+
+    private string TruncateForLog(string value)
+    {
+        var maxChars = GetInt("Logging:Chat:MaxLoggedBodyChars", "LOG_CHAT_MAX_BODY_CHARS", 10000, 100, 500000);
+        return value.Length <= maxChars ? value : value[..maxChars] + "\n... log truncado ...";
     }
 
     private static async Task<HttpResponseMessage> SendAsyncWithTimeout(HttpClient httpClient, HttpRequestMessage request, int timeoutSeconds, CancellationToken cancellationToken)
