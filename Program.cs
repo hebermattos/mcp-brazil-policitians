@@ -63,6 +63,13 @@ app.MapGet("/health", () => Results.Ok(new
     chatProvider = GetStringSetting(configuration, "Chat:Provider", "CHAT_PROVIDER", "ollama")
 }));
 
+app.MapGet("/api/client-settings", () => Results.Ok(new
+{
+    chatEndpoint,
+    mcpEndpoint,
+    chatProvider = GetStringSetting(configuration, "Chat:Provider", "CHAT_PROVIDER", "ollama")
+}));
+
 app.MapPost(chatEndpoint, async (
     ChatPromptRequest request,
     OpenAiChatService chatService,
