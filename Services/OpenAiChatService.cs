@@ -55,7 +55,7 @@ public sealed class OpenAiChatService
         var defaultItems = GetIntSetting("Chat:DefaultSearchItems", "CHAT_DEFAULT_SEARCH_ITEMS", DefaultSearchItems, minValue: 1, maxValue: 100);
         var defaultPage = GetIntSetting("Chat:DefaultSearchPage", "CHAT_DEFAULT_SEARCH_PAGE", DefaultSearchPage, minValue: 1, maxValue: 10_000);
 
-        var systemPrompt = $"""
+        var systemPrompt = $$"""
 Você é um planejador de ferramentas para um sistema que consulta a API de Dados Abertos da Câmara dos Deputados.
 Responda exclusivamente com JSON válido, sem markdown.
 
@@ -70,21 +70,21 @@ Escolha uma ferramenta:
 Regras:
 - Para perguntas sobre projetos de lei, PEC, MP, proposições, assuntos legislativos ou temas como escala 6x1, use search_proposicoes.
 - Para perguntas sobre deputados/parlamentares, use search_deputados, exceto quando houver id e o usuário pedir detalhes.
-- Use itens no máximo {defaultItems}.
-- Use pagina {defaultPage} quando o usuário não informar página.
+- Use itens no máximo {{defaultItems}}.
+- Use pagina {{defaultPage}} quando o usuário não informar página.
 - Quando o usuário informar UF, use siglaUf com duas letras maiúsculas.
 - Quando o usuário informar ano, use ano numérico.
 - Quando buscar por assunto de proposição, coloque o assunto principal em ementa.
 
 Formato obrigatório:
-{{
+{
   "tool": "search_proposicoes",
-  "arguments": {{
+  "arguments": {
     "ementa": "escala 6x1",
-    "itens": {defaultItems},
-    "pagina": {defaultPage}
-  }}
-}}
+    "itens": {{defaultItems}},
+    "pagina": {{defaultPage}}
+  }
+}
 """;
 
         var content = await CallChatModelAsync(systemPrompt, prompt, forceJson: true, cancellationToken);
