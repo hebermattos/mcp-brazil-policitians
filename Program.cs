@@ -108,12 +108,15 @@ static bool GetBoolSetting(IConfiguration configuration, string configurationKey
 
 static string[] GetStringArraySetting(IConfiguration configuration, string configurationKey, string[] defaultValue)
 {
-    var section = configuration.GetSection(configurationKey);
-    var values = section.Get<string[]>();
+    var values = configuration
+        .GetSection(configurationKey)
+        .GetChildren()
+        .Select(child => child.Value)
+        .Where(value => !string.IsNullOrWhiteSpace(value))
+        .Select(value => value!)
+        .ToArray();
 
-    return values is { Length: > 0 }
-        ? values.Where(value => !string.IsNullOrWhiteSpace(value)).ToArray()
-        : defaultValue;
+    return values.Length > 0 ? values : defaultValue;
 }
 
 static string NormalizeEndpoint(string endpoint)
