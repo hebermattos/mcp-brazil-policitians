@@ -39,9 +39,14 @@ public sealed class DirectChatQueryService
 
     public async Task<ChatPromptResponse?> TryHandleAsync(string prompt, CancellationToken cancellationToken)
     {
+        if (LooksLikeVotesFromLatestVotingQuery(prompt))
+        {
+            return await GetVotesFromLatestVotingsAsync(prompt, cancellationToken, defaultVotingCount: 1);
+        }
+
         if (LooksLikeVotesByDeputyFromLatestVotingsQuery(prompt))
         {
-            return await GetVotesFromLatestVotingsAsync(prompt, cancellationToken);
+            return await GetVotesFromLatestVotingsAsync(prompt, cancellationToken, defaultVotingCount: 5);
         }
 
         var plan = TryCreateDirectPlan(prompt);
@@ -65,9 +70,9 @@ public sealed class DirectChatQueryService
             null);
     }
 
-    private async Task<ChatPromptResponse> GetVotesFromLatestVotingsAsync(string prompt, CancellationToken cancellationToken)
+    private async Task<ChatPromptResponse> GetVotesFromLatestVotingsAsync(string prompt, CancellationToken cancellationToken, int defaultVotingCount)
     {
-        var votingCount = ExtractRequestedCount(prompt, defaultValue: 5, min: 1, max: 10);
+        var votingCount = ExtractRequestedCount(prompt, defaultValue: defaultVotingCount, min: 1, max: 10);
         var maxVotesPerVoting = GetInt("Chat:DefaultVoteItems", "CHAT_DEFAULT_VOTE_ITEMS", 100, 1, 100);
 
         var searchArguments = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
@@ -290,6 +295,23 @@ public sealed class DirectChatQueryService
             FinalResult: "proposicoes");
     }
 
+    private static bool LooksLikeVotesFromLatestVotingQuery(string prompt)
+    {
+        if (string.IsNullOrWhiteSpace(prompt))
+        {
+            return false;
+        }
+
+        var normalized = NormalizeForMatching(prompt);
+        var mentionsVotes = normalized.Contains("votos", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("voto", StringComparison.OrdinalIgnoreCase);
+        var mentionsVoting = normalized.Contains("votacao", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("votacoes", StringComparison.OrdinalIgnoreCase);
+        var mentionsLatest = ContainsLatestWord(normalized);
+
+        return mentionsVotes && mentionsVoting && mentionsLatest;
+    }
+
     private static bool LooksLikeVotesByDeputyFromLatestVotingsQuery(string prompt)
     {
         if (string.IsNullOrWhiteSpace(prompt))
@@ -304,10 +326,7 @@ public sealed class DirectChatQueryService
             || normalized.Contains("deputados", StringComparison.OrdinalIgnoreCase)
             || normalized.Contains("parlamentar", StringComparison.OrdinalIgnoreCase)
             || normalized.Contains("parlamentares", StringComparison.OrdinalIgnoreCase);
-        var mentionsLatestVotings = normalized.Contains("ultimas", StringComparison.OrdinalIgnoreCase)
-            || normalized.Contains("ultimos", StringComparison.OrdinalIgnoreCase)
-            || normalized.Contains("recentes", StringComparison.OrdinalIgnoreCase)
-            || normalized.Contains("mais recentes", StringComparison.OrdinalIgnoreCase);
+        var mentionsLatestVotings = ContainsLatestWord(normalized);
         var mentionsVotings = normalized.Contains("votacoes", StringComparison.OrdinalIgnoreCase)
             || normalized.Contains("votacao", StringComparison.OrdinalIgnoreCase);
 
@@ -327,13 +346,25 @@ public sealed class DirectChatQueryService
             || normalized.Contains("voto", StringComparison.OrdinalIgnoreCase)
             || normalized.Contains("votos", StringComparison.OrdinalIgnoreCase);
 
-        var mentionsLatest = normalized.Contains("ultima", StringComparison.OrdinalIgnoreCase)
-            || normalized.Contains("ultimas", StringComparison.OrdinalIgnoreCase)
-            || normalized.Contains("recente", StringComparison.OrdinalIgnoreCase)
-            || normalized.Contains("recentes", StringComparison.OrdinalIgnoreCase)
-            || normalized.Contains("mais recente", StringComparison.OrdinalIgnoreCase);
+        var mentionsLatest = ContainsLatestWord(normalized);
 
         return mentionsVoting && mentionsLatest;
+    }
+
+    private static bool ContainsLatestWord(string normalized)
+    {
+        return normalized.Contains("ultima", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("ultimas", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("ultimo", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("ultimos", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("ulitma", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("ulitmas", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("ultma", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("ultmas", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("recente", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("recentes", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("mais recente", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("mais recentes", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string? TryExtractPropositionsAuthor(string prompt)
