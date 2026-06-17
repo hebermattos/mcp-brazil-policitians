@@ -18,13 +18,19 @@ public sealed class OpenAiChatService
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IConfiguration _configuration;
     private readonly ILogger<OpenAiChatService> _logger;
+    private readonly PromptFileLogService _promptFileLogService;
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web);
 
-    public OpenAiChatService(IHttpClientFactory httpClientFactory, IConfiguration configuration, ILogger<OpenAiChatService> logger)
+    public OpenAiChatService(
+        IHttpClientFactory httpClientFactory,
+        IConfiguration configuration,
+        ILogger<OpenAiChatService> logger,
+        PromptFileLogService promptFileLogService)
     {
         _httpClientFactory = httpClientFactory;
         _configuration = configuration;
         _logger = logger;
+        _promptFileLogService = promptFileLogService;
     }
 
     public async Task<ChatPromptResponse> GetAnswerAsync(string prompt, CancellationToken cancellationToken)
@@ -39,42 +45,58 @@ public sealed class OpenAiChatService
 
         var stopwatch = Stopwatch.StartNew();
         var provider = GetProvider();
+        var promptLog = _promptFileLogService.Start(operationId, prompt, provider);
 
         _logger.LogInformation(
-            "Chat request started. Provider={Provider}, PromptLength={PromptLength}, Prompt={Prompt}",
+            "Chat request started. Provider={Provider}, PromptLength={PromptLength}, Prompt={Prompt}, PromptLogFile={PromptLogFile}",
             provider,
             prompt.Length,
-            GetOptionalLogText("Logging:Chat:IncludePromptContent", "LOG_CHAT_INCLUDE_PROMPT_CONTENT", prompt));
+            GetOptionalLogText("Logging:Chat:IncludePromptContent", "LOG_CHAT_INCLUDE_PROMPT_CONTENT", prompt),
+            promptLog?.FilePath);
 
         try
         {
-            var plan = await CreateToolPlanAsync(prompt, cancellationToken);
-            using var data = await ExecuteCamaraToolAsync(plan, cancellationToken);
-            var answer = await CreateFinalAnswerAsync(prompt, plan, data, cancellationToken);
+            var plan = await CreateToolPlanAsync(prompt, promptLog, cancellationToken);
+            using var data = await ExecuteCamaraToolAsync(plan, promptLog, cancellationToken);
+            var answer = await CreateFinalAnswerAsync(prompt, plan, data, promptLog, cancellationToken);
 
             stopwatch.Stop();
+            var completionData = new
+            {
+                provider,
+                plan.Tool,
+                plan.Arguments,
+                elapsedMs = stopwatch.ElapsedMilliseconds,
+                answerLength = answer.Length
+            };
+
             _logger.LogInformation(
-                "Chat request completed. Provider={Provider}, Tool={Tool}, Arguments={Arguments}, ElapsedMs={ElapsedMs}",
+                "Chat request completed. Provider={Provider}, Tool={Tool}, Arguments={Arguments}, ElapsedMs={ElapsedMs}, PromptLogFile={PromptLogFile}",
                 provider,
                 plan.Tool,
                 JsonSerializer.Serialize(plan.Arguments, _jsonOptions),
-                stopwatch.ElapsedMilliseconds);
+                stopwatch.ElapsedMilliseconds,
+                promptLog?.FilePath);
+
+            _promptFileLogService.Complete(promptLog, completionData);
 
             return new ChatPromptResponse(
                 answer,
                 plan.Tool,
                 plan.Arguments.ToDictionary(x => x.Key, x => (object?)x.Value, StringComparer.OrdinalIgnoreCase),
-                data.RootElement.Clone());
+                data.RootElement.Clone(),
+                promptLog?.FilePath);
         }
         catch (Exception ex)
         {
             stopwatch.Stop();
-            _logger.LogError(ex, "Chat request failed. Provider={Provider}, ElapsedMs={ElapsedMs}", provider, stopwatch.ElapsedMilliseconds);
+            _logger.LogError(ex, "Chat request failed. Provider={Provider}, ElapsedMs={ElapsedMs}, PromptLogFile={PromptLogFile}", provider, stopwatch.ElapsedMilliseconds, promptLog?.FilePath);
+            _promptFileLogService.Fail(promptLog, ex, new { provider, elapsedMs = stopwatch.ElapsedMilliseconds });
             throw;
         }
     }
 
-    private async Task<ToolPlan> CreateToolPlanAsync(string prompt, CancellationToken cancellationToken)
+    private async Task<ToolPlan> CreateToolPlanAsync(string prompt, PromptFileLogContext? promptLog, CancellationToken cancellationToken)
     {
         var defaultItems = GetInt("Chat:DefaultSearchItems", "CHAT_DEFAULT_SEARCH_ITEMS", 10, 1, 100);
         var defaultPage = GetInt("Chat:DefaultSearchPage", "CHAT_DEFAULT_SEARCH_PAGE", 1, 1, 10000);
@@ -115,11 +137,26 @@ Formato:
             defaultPage,
             defaultItems);
 
-        var content = await CallChatModelAsync(systemPrompt, prompt, forceJson: true, cancellationToken);
+        _promptFileLogService.Append(promptLog, "tool-plan.request", new
+        {
+            provider = GetProvider(),
+            defaultPage,
+            defaultItems,
+            forceJson = true,
+            systemPrompt = _promptFileLogService.GetOptionalLogText("Logging:PromptFile:IncludeModelPrompts", "LOG_PROMPT_FILE_INCLUDE_MODEL_PROMPTS", systemPrompt),
+            userPrompt = _promptFileLogService.GetOptionalLogText("Logging:PromptFile:IncludePromptContent", "LOG_PROMPT_FILE_INCLUDE_PROMPT_CONTENT", prompt)
+        });
+
+        var content = await CallChatModelAsync(systemPrompt, prompt, forceJson: true, purpose: "tool-plan", promptLog, cancellationToken);
 
         _logger.LogInformation(
             "Raw tool plan returned by model. Content={Content}",
             GetOptionalLogText("Logging:Chat:IncludeModelResponses", "LOG_CHAT_INCLUDE_MODEL_RESPONSES", content));
+
+        _promptFileLogService.Append(promptLog, "tool-plan.raw-response", new
+        {
+            content = _promptFileLogService.GetOptionalLogText("Logging:PromptFile:IncludeModelResponses", "LOG_PROMPT_FILE_INCLUDE_MODEL_RESPONSES", content)
+        });
 
         try
         {
@@ -161,16 +198,25 @@ Formato:
                 JsonSerializer.Serialize(rawArgs, _jsonOptions),
                 JsonSerializer.Serialize(normalizedArgs, _jsonOptions));
 
+            _promptFileLogService.Append(promptLog, "tool-plan.normalized", new
+            {
+                rawTool,
+                tool,
+                rawArguments = rawArgs,
+                normalizedArguments = normalizedArgs
+            });
+
             return new ToolPlan(tool, normalizedArgs);
         }
         catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
         {
             _logger.LogWarning(ex, "Invalid tool plan returned by model. Content={Content}", content);
+            _promptFileLogService.Fail(promptLog, ex, new { stage = "tool-plan.parse", content = _promptFileLogService.Truncate(content) });
             throw new InvalidOperationException("Não foi possível interpretar o plano de ferramenta retornado pelo modelo.", ex);
         }
     }
 
-    private async Task<JsonDocument> ExecuteCamaraToolAsync(ToolPlan plan, CancellationToken cancellationToken)
+    private async Task<JsonDocument> ExecuteCamaraToolAsync(ToolPlan plan, PromptFileLogContext? promptLog, CancellationToken cancellationToken)
     {
         var (path, query) = BuildCamaraRequest(plan);
         var baseUrl = GetString("CamaraApi:BaseUrl", "CAMARA_API_BASE_URL", DefaultCamaraBaseUrl);
@@ -184,6 +230,15 @@ Formato:
             JsonSerializer.Serialize(query, _jsonOptions),
             requestUri,
             timeoutSeconds);
+
+        _promptFileLogService.Append(promptLog, "camara-api.request", new
+        {
+            plan.Tool,
+            path,
+            query,
+            url = requestUri.ToString(),
+            timeoutSeconds
+        });
 
         using var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
@@ -200,6 +255,14 @@ Formato:
             stopwatch.ElapsedMilliseconds,
             responseText.Length,
             GetOptionalLogText("Logging:Chat:IncludeCamaraResponseBody", "LOG_CHAT_INCLUDE_CAMARA_RESPONSE_BODY", responseText));
+
+        _promptFileLogService.Append(promptLog, "camara-api.response", new
+        {
+            statusCode = (int)response.StatusCode,
+            elapsedMs = stopwatch.ElapsedMilliseconds,
+            bodyLength = responseText.Length,
+            body = _promptFileLogService.GetOptionalLogText("Logging:PromptFile:IncludeCamaraResponseBody", "LOG_PROMPT_FILE_INCLUDE_CAMARA_RESPONSE_BODY", responseText)
+        });
 
         if (!response.IsSuccessStatusCode)
         {
@@ -235,7 +298,7 @@ Formato:
         };
     }
 
-    private async Task<string> CreateFinalAnswerAsync(string prompt, ToolPlan plan, JsonDocument data, CancellationToken cancellationToken)
+    private async Task<string> CreateFinalAnswerAsync(string prompt, ToolPlan plan, JsonDocument data, PromptFileLogContext? promptLog, CancellationToken cancellationToken)
     {
         var maxChars = GetInt("Chat:MaxDataJsonChars", "CHAT_MAX_DATA_JSON_CHARS", 20000, 1000, 500000);
         var dataJson = data.RootElement.GetRawText();
@@ -271,27 +334,55 @@ JSON retornado pela API da Câmara:
             dataJson.Length,
             maxChars);
 
-        var answer = await CallChatModelAsync(systemPrompt, userContent, forceJson: false, cancellationToken);
+        _promptFileLogService.Append(promptLog, "final-answer.request", new
+        {
+            plan.Tool,
+            plan.Arguments,
+            dataJsonLength = dataJson.Length,
+            maxDataJsonChars = maxChars,
+            systemPrompt = _promptFileLogService.GetOptionalLogText("Logging:PromptFile:IncludeModelPrompts", "LOG_PROMPT_FILE_INCLUDE_MODEL_PROMPTS", systemPrompt),
+            userPrompt = _promptFileLogService.GetOptionalLogText("Logging:PromptFile:IncludeModelPrompts", "LOG_PROMPT_FILE_INCLUDE_MODEL_PROMPTS", userContent)
+        });
+
+        var answer = await CallChatModelAsync(systemPrompt, userContent, forceJson: false, purpose: "final-answer", promptLog, cancellationToken);
 
         _logger.LogInformation(
             "Final answer generated. AnswerLength={AnswerLength}, Answer={Answer}",
             answer.Length,
             GetOptionalLogText("Logging:Chat:IncludeModelResponses", "LOG_CHAT_INCLUDE_MODEL_RESPONSES", answer));
 
+        _promptFileLogService.Append(promptLog, "final-answer.response", new
+        {
+            answerLength = answer.Length,
+            answer = _promptFileLogService.GetOptionalLogText("Logging:PromptFile:IncludeModelResponses", "LOG_PROMPT_FILE_INCLUDE_MODEL_RESPONSES", answer)
+        });
+
         return answer;
     }
 
-    private Task<string> CallChatModelAsync(string systemPrompt, string userPrompt, bool forceJson, CancellationToken cancellationToken)
+    private Task<string> CallChatModelAsync(
+        string systemPrompt,
+        string userPrompt,
+        bool forceJson,
+        string purpose,
+        PromptFileLogContext? promptLog,
+        CancellationToken cancellationToken)
     {
         return GetProvider() switch
         {
-            "openai" => CallOpenAiChatAsync(systemPrompt, userPrompt, forceJson, cancellationToken),
-            "ollama" => CallOllamaChatAsync(systemPrompt, userPrompt, forceJson, cancellationToken),
+            "openai" => CallOpenAiChatAsync(systemPrompt, userPrompt, forceJson, purpose, promptLog, cancellationToken),
+            "ollama" => CallOllamaChatAsync(systemPrompt, userPrompt, forceJson, purpose, promptLog, cancellationToken),
             var provider => throw new InvalidOperationException($"Provedor de chat inválido: '{provider}'. Use 'openai' ou 'ollama'.")
         };
     }
 
-    private async Task<string> CallOpenAiChatAsync(string systemPrompt, string userPrompt, bool forceJson, CancellationToken cancellationToken)
+    private async Task<string> CallOpenAiChatAsync(
+        string systemPrompt,
+        string userPrompt,
+        bool forceJson,
+        string purpose,
+        PromptFileLogContext? promptLog,
+        CancellationToken cancellationToken)
     {
         var apiKey = GetString("Chat:OpenAI:ApiKey", "OPENAI_API_KEY", string.Empty);
         if (string.IsNullOrWhiteSpace(apiKey))
@@ -319,12 +410,23 @@ JSON retornado pela API da Câmara:
         }
 
         _logger.LogInformation(
-            "Calling OpenAI chat model. Endpoint={Endpoint}, Model={Model}, ForceJson={ForceJson}, TimeoutSeconds={TimeoutSeconds}, UserPromptLength={UserPromptLength}",
+            "Calling OpenAI chat model. Endpoint={Endpoint}, Model={Model}, ForceJson={ForceJson}, TimeoutSeconds={TimeoutSeconds}, UserPromptLength={UserPromptLength}, Purpose={Purpose}",
             endpoint,
             model,
             forceJson,
             timeoutSeconds,
-            userPrompt.Length);
+            userPrompt.Length,
+            purpose);
+
+        _promptFileLogService.Append(promptLog, "openai.request", new
+        {
+            purpose,
+            endpoint = endpoint.ToString(),
+            model,
+            forceJson,
+            timeoutSeconds,
+            userPromptLength = userPrompt.Length
+        });
 
         using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
@@ -337,10 +439,20 @@ JSON retornado pela API da Câmara:
         stopwatch.Stop();
 
         _logger.LogInformation(
-            "OpenAI response received. StatusCode={StatusCode}, ElapsedMs={ElapsedMs}, BodyLength={BodyLength}",
+            "OpenAI response received. StatusCode={StatusCode}, ElapsedMs={ElapsedMs}, BodyLength={BodyLength}, Purpose={Purpose}",
             (int)response.StatusCode,
             stopwatch.ElapsedMilliseconds,
-            responseText.Length);
+            responseText.Length,
+            purpose);
+
+        _promptFileLogService.Append(promptLog, "openai.response", new
+        {
+            purpose,
+            statusCode = (int)response.StatusCode,
+            elapsedMs = stopwatch.ElapsedMilliseconds,
+            bodyLength = responseText.Length,
+            body = _promptFileLogService.GetOptionalLogText("Logging:PromptFile:IncludeModelResponses", "LOG_PROMPT_FILE_INCLUDE_MODEL_RESPONSES", responseText)
+        });
 
         if (!response.IsSuccessStatusCode)
         {
@@ -353,7 +465,13 @@ JSON retornado pela API da Câmara:
         return string.IsNullOrWhiteSpace(content) ? throw new InvalidOperationException("A OpenAI retornou uma resposta vazia.") : content;
     }
 
-    private async Task<string> CallOllamaChatAsync(string systemPrompt, string userPrompt, bool forceJson, CancellationToken cancellationToken)
+    private async Task<string> CallOllamaChatAsync(
+        string systemPrompt,
+        string userPrompt,
+        bool forceJson,
+        string purpose,
+        PromptFileLogContext? promptLog,
+        CancellationToken cancellationToken)
     {
         var model = GetString("Chat:Ollama:Model", "OLLAMA_MODEL", DefaultOllamaModel);
         var endpoint = BuildOllamaEndpoint(GetString("Chat:Ollama:BaseUrl", "OLLAMA_BASE_URL", DefaultOllamaBaseUrl));
@@ -377,13 +495,25 @@ JSON retornado pela API da Câmara:
         }
 
         _logger.LogInformation(
-            "Calling Ollama chat model. Endpoint={Endpoint}, Model={Model}, ForceJson={ForceJson}, UseJsonFormat={UseJsonFormat}, TimeoutSeconds={TimeoutSeconds}, UserPromptLength={UserPromptLength}",
+            "Calling Ollama chat model. Endpoint={Endpoint}, Model={Model}, ForceJson={ForceJson}, UseJsonFormat={UseJsonFormat}, TimeoutSeconds={TimeoutSeconds}, UserPromptLength={UserPromptLength}, Purpose={Purpose}",
             endpoint,
             model,
             forceJson,
             useJsonFormat,
             timeoutSeconds,
-            userPrompt.Length);
+            userPrompt.Length,
+            purpose);
+
+        _promptFileLogService.Append(promptLog, "ollama.request", new
+        {
+            purpose,
+            endpoint = endpoint.ToString(),
+            model,
+            forceJson,
+            useJsonFormat,
+            timeoutSeconds,
+            userPromptLength = userPrompt.Length
+        });
 
         using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
         request.Content = new StringContent(JsonSerializer.Serialize(payload, _jsonOptions), Encoding.UTF8, "application/json");
@@ -395,11 +525,21 @@ JSON retornado pela API da Câmara:
         stopwatch.Stop();
 
         _logger.LogInformation(
-            "Ollama response received. StatusCode={StatusCode}, ElapsedMs={ElapsedMs}, BodyLength={BodyLength}, Body={Body}",
+            "Ollama response received. StatusCode={StatusCode}, ElapsedMs={ElapsedMs}, BodyLength={BodyLength}, Body={Body}, Purpose={Purpose}",
             (int)response.StatusCode,
             stopwatch.ElapsedMilliseconds,
             responseText.Length,
-            GetOptionalLogText("Logging:Chat:IncludeModelResponses", "LOG_CHAT_INCLUDE_MODEL_RESPONSES", responseText));
+            GetOptionalLogText("Logging:Chat:IncludeModelResponses", "LOG_CHAT_INCLUDE_MODEL_RESPONSES", responseText),
+            purpose);
+
+        _promptFileLogService.Append(promptLog, "ollama.response", new
+        {
+            purpose,
+            statusCode = (int)response.StatusCode,
+            elapsedMs = stopwatch.ElapsedMilliseconds,
+            bodyLength = responseText.Length,
+            body = _promptFileLogService.GetOptionalLogText("Logging:PromptFile:IncludeModelResponses", "LOG_PROMPT_FILE_INCLUDE_MODEL_RESPONSES", responseText)
+        });
 
         if (!response.IsSuccessStatusCode)
         {
