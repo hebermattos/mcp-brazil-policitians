@@ -152,12 +152,30 @@
       white-space: normal;
     }
 
-    .progress-list li {
-      margin: 4px 0;
-    }
-
+    .progress-list li { margin: 4px 0; }
     .progress-list .ok { color: var(--success); }
     .progress-list .fail { color: var(--error); }
+
+    .simple-answer-title {
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .simple-answer-list {
+      margin: 0;
+      padding-left: 22px;
+      white-space: normal;
+    }
+
+    .simple-answer-list li {
+      margin: 6px 0;
+    }
+
+    .answer-muted {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 8px;
+    }
 
     .error .bubble {
       background: var(--error-bg);
@@ -451,17 +469,126 @@
     }
 
     function addAssistantResponse(payload) {
-      const answer = payload?.answer || "Sem resposta.";
+      const answerHtml = buildReadableAnswerHtml(payload);
       const details = JSON.stringify({
         tool: payload?.tool,
         arguments: payload?.arguments,
-        data: payload?.data
+        data: payload?.data,
+        rawAnswer: payload?.answer
       }, null, 2);
 
-      const html = escapeHtml(answer) +
+      const html = answerHtml +
         "<details><summary>Ver dados da consulta</summary><pre>" + escapeHtml(details) + "</pre></details>";
 
       addMessageHtml("assistant", html);
+    }
+
+    function buildReadableAnswerHtml(payload) {
+      const camaraData = payload?.data?.dados;
+
+      if (payload?.tool === "search_deputados" && Array.isArray(camaraData)) {
+        return renderDeputadosList(camaraData, payload?.arguments);
+      }
+
+      const parsedAnswer = parseJsonLikeAnswer(payload?.answer);
+      if (Array.isArray(parsedAnswer)) {
+        return renderGenericObjectList(parsedAnswer);
+      }
+
+      return renderPlainText(payload?.answer || "Sem resposta.");
+    }
+
+    function renderDeputadosList(deputados, args) {
+      const sorted = [...deputados].sort((a, b) => String(a?.nome || "").localeCompare(String(b?.nome || ""), "pt-BR"));
+
+      if (sorted.length === 0) {
+        return "<p>Não encontrei deputados com os filtros usados.</p>";
+      }
+
+      const titleParts = [];
+      if (args?.siglaUf) titleParts.push("UF " + args.siglaUf);
+      if (args?.siglaPartido) titleParts.push("partido " + args.siglaPartido);
+
+      const title = titleParts.length > 0
+        ? "Deputados encontrados — " + titleParts.join(", ")
+        : "Deputados encontrados";
+
+      const items = sorted.map(item => {
+        const nome = escapeHtml(item?.nome || "Sem nome");
+        const partido = item?.siglaPartido ? " — " + escapeHtml(item.siglaPartido) : "";
+        const uf = item?.siglaUf ? "/" + escapeHtml(item.siglaUf) : "";
+        return "<li><strong>" + nome + "</strong>" + partido + uf + "</li>";
+      }).join("");
+
+      return "<div class=\"simple-answer-title\">" + escapeHtml(title) + "</div>" +
+        "<ol class=\"simple-answer-list\">" + items + "</ol>" +
+        "<div class=\"answer-muted\">Resultado ordenado alfabeticamente pelo nome, com base nos dados retornados pela Câmara.</div>";
+    }
+
+    function renderGenericObjectList(items) {
+      if (items.length === 0) {
+        return "<p>Nenhum item encontrado.</p>";
+      }
+
+      const normalizedItems = items.map(item => typeof item === "object" && item !== null ? item : { valor: item });
+
+      const sorted = [...normalizedItems].sort((a, b) => {
+        const left = String(a.nome || a.name || a.titulo || a.valor || "");
+        const right = String(b.nome || b.name || b.titulo || b.valor || "");
+        return left.localeCompare(right, "pt-BR");
+      });
+
+      const htmlItems = sorted.map(item => {
+        const label = item.nome || item.name || item.titulo || item.valor || JSON.stringify(item);
+        const details = Object.entries(item)
+          .filter(([key]) => !["nome", "name", "titulo", "valor"].includes(key))
+          .map(([key, value]) => key + ": " + value)
+          .join(" — ");
+
+        return "<li><strong>" + escapeHtml(label) + "</strong>" + (details ? " — " + escapeHtml(details) : "") + "</li>";
+      }).join("");
+
+      return "<div class=\"simple-answer-title\">Resultado</div>" +
+        "<ol class=\"simple-answer-list\">" + htmlItems + "</ol>" +
+        "<div class=\"answer-muted\">A resposta original veio em JSON, então a interface converteu para lista simples.</div>";
+    }
+
+    function renderPlainText(text) {
+      const cleanText = stripMarkdownJsonFence(text);
+      const parsed = parseJsonLikeAnswer(cleanText);
+
+      if (Array.isArray(parsed)) {
+        return renderGenericObjectList(parsed);
+      }
+
+      return "<div>" + escapeHtml(cleanText).replace(/\n/g, "<br>") + "</div>";
+    }
+
+    function parseJsonLikeAnswer(value) {
+      const text = stripMarkdownJsonFence(value).trim();
+      if (!text) return null;
+
+      const startIndex = Math.min(
+        text.indexOf("[") === -1 ? Number.MAX_SAFE_INTEGER : text.indexOf("["),
+        text.indexOf("{") === -1 ? Number.MAX_SAFE_INTEGER : text.indexOf("{")
+      );
+
+      if (startIndex === Number.MAX_SAFE_INTEGER) return null;
+
+      const candidate = text.substring(startIndex).trim();
+      try {
+        const parsed = JSON.parse(candidate);
+        return parsed;
+      } catch {
+        return null;
+      }
+    }
+
+    function stripMarkdownJsonFence(value) {
+      let text = String(value || "").trim();
+      text = text.replace(/^```(?:json)?\s*/i, "");
+      text = text.replace(/```$/i, "");
+      return text.trim();
     }
 
     function addMessage(type, text) {
