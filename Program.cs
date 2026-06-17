@@ -19,7 +19,13 @@ builder.Services.AddCors(options =>
 
 builder.Services
     .AddMcpServer()
-    .WithHttpTransport()
+    .WithHttpTransport(options =>
+    {
+        // This project exposes simple request/response tools and does not need
+        // server-side MCP sessions. Stateless mode also avoids requiring the
+        // Mcp-Session-Id header when testing the endpoint from a browser/client.
+        options.Stateless = true;
+    })
     .WithToolsFromAssembly();
 
 var app = builder.Build();
@@ -32,6 +38,7 @@ app.MapGet("/health", () => Results.Ok(new
 {
     status = "ok",
     transport = "streamable-http",
+    stateless = true,
     mcpEndpoint = "/mcp",
     clientPage = "/"
 }));
