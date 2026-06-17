@@ -23,15 +23,25 @@ try
         .Enrich.FromLogContext());
 
     var configuration = builder.Configuration;
-    var mcpEndpoint = NormalizeEndpoint(GetStringSetting(configuration, "Mcp:Endpoint", "MCP_ENDPOINT", "/mcp"));
+    var mcpPageEndpoint = NormalizeEndpoint(GetStringSetting(configuration, "Mcp:PageEndpoint", "MCP_PAGE_ENDPOINT", "/mcp"));
+    var mcpEndpoint = NormalizeEndpoint(GetStringSetting(configuration, "Mcp:Endpoint", "MCP_ENDPOINT", "/mcp-server"));
     var chatEndpoint = NormalizeEndpoint(GetStringSetting(configuration, "Chat:Endpoint", "CHAT_ENDPOINT", "/api/chat"));
     var mcpStateless = GetBoolSetting(configuration, "Mcp:Stateless", "MCP_STATELESS", defaultValue: true);
     var allowAnyOrigin = GetBoolSetting(configuration, "Cors:AllowAnyOrigin", "CORS_ALLOW_ANY_ORIGIN", defaultValue: true);
     var exposedHeaders = GetStringArraySetting(configuration, "Cors:ExposedHeaders", ["Mcp-Session-Id"]);
     var allowedOrigins = GetStringArraySetting(configuration, "Cors:AllowedOrigins", []);
 
+    if (string.Equals(mcpPageEndpoint, mcpEndpoint, StringComparison.OrdinalIgnoreCase))
+    {
+        Log.Warning(
+            "MCP page endpoint and MCP server endpoint were both configured as {Endpoint}. Moving MCP server endpoint to /mcp-server to avoid route conflicts.",
+            mcpEndpoint);
+        mcpEndpoint = "/mcp-server";
+    }
+
     Log.Information(
-        "Effective server settings: McpEndpoint={McpEndpoint}, ChatEndpoint={ChatEndpoint}, McpStateless={McpStateless}, AllowAnyOrigin={AllowAnyOrigin}, AllowedOrigins={AllowedOrigins}, ExposedHeaders={ExposedHeaders}, ChatProvider={ChatProvider}",
+        "Effective server settings: McpPageEndpoint={McpPageEndpoint}, McpEndpoint={McpEndpoint}, ChatEndpoint={ChatEndpoint}, McpStateless={McpStateless}, AllowAnyOrigin={AllowAnyOrigin}, AllowedOrigins={AllowedOrigins}, ExposedHeaders={ExposedHeaders}, ChatProvider={ChatProvider}",
+        mcpPageEndpoint,
         mcpEndpoint,
         chatEndpoint,
         mcpStateless,
@@ -98,14 +108,18 @@ try
     app.UseDefaultFiles();
     app.UseStaticFiles();
 
+    app.MapGet(mcpPageEndpoint, () => Results.File("wwwroot/mcp.html", "text/html"));
+
     app.MapGet("/health", () => Results.Ok(new
     {
         status = "ok",
         transport = "streamable-http",
         stateless = mcpStateless,
+        mcpPageEndpoint,
         mcpEndpoint,
         chatEndpoint,
         clientPage = "/",
+        mcpPage = mcpPageEndpoint,
         chatProvider = GetStringSetting(configuration, "Chat:Provider", "CHAT_PROVIDER", "ollama"),
         promptFileLogging = GetBoolSetting(configuration, "Logging:PromptFile:Enabled", "LOG_PROMPT_FILE_ENABLED", defaultValue: true),
         plainTextAnswerFormatting = true
@@ -115,6 +129,7 @@ try
     {
         chatEndpoint,
         mcpEndpoint,
+        mcpPageEndpoint,
         chatProvider = GetStringSetting(configuration, "Chat:Provider", "CHAT_PROVIDER", "ollama")
     }));
 
