@@ -126,7 +126,8 @@ public sealed class DirectChatQueryService
 
                 foreach (var vote in votes.EnumerateArray())
                 {
-                    var voteNode = JsonNode.Parse(vote.GetRawText())?.AsObject() ?? [];
+                    var parsedVote = JsonNode.Parse(vote.GetRawText());
+                    var voteNode = parsedVote as JsonObject ?? new JsonObject();
                     voteNode["idVotacaoOrigem"] = votingId;
                     voteNode["dataVotacaoOrigem"] = votingDate;
                     voteNode["siglaOrgaoOrigem"] = votingOrg;
