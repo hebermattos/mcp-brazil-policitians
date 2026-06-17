@@ -36,16 +36,8 @@
       border-bottom: 1px solid #374151;
     }
 
-    header h1 {
-      margin: 0;
-      font-size: 22px;
-    }
-
-    header p {
-      margin: 6px 0 0;
-      color: #d1d5db;
-      font-size: 14px;
-    }
+    header h1 { margin: 0; font-size: 22px; }
+    header p { margin: 6px 0 0; color: #d1d5db; font-size: 14px; }
 
     main {
       width: min(1180px, 100%);
@@ -69,33 +61,20 @@
       box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
     }
 
-    .card h2 {
-      margin: 0 0 10px;
-      font-size: 17px;
-    }
+    .card h2 { margin: 0 0 10px; font-size: 17px; }
 
-    .muted {
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.4;
-    }
+    .muted { color: var(--muted); font-size: 13px; line-height: 1.4; }
 
     .status-row {
       display: grid;
-      grid-template-columns: 130px 1fr;
+      grid-template-columns: 150px 1fr;
       gap: 8px;
       margin: 8px 0;
       font-size: 14px;
     }
 
-    .label {
-      color: var(--muted);
-      font-weight: 700;
-    }
-
-    .value {
-      overflow-wrap: anywhere;
-    }
+    .label { color: var(--muted); font-weight: 700; }
+    .value { overflow-wrap: anywhere; }
 
     .badge {
       display: inline-block;
@@ -107,15 +86,8 @@
       font-weight: 700;
     }
 
-    .badge.ok {
-      background: #dcfce7;
-      color: var(--success);
-    }
-
-    .badge.fail {
-      background: #fee2e2;
-      color: var(--error);
-    }
+    .badge.ok { background: #dcfce7; color: var(--success); }
+    .badge.fail { background: #fee2e2; color: var(--error); }
 
     button {
       border: 0;
@@ -130,12 +102,7 @@
     button:hover { background: var(--primary-hover); }
     button:disabled { background: #9ca3af; cursor: not-allowed; }
 
-    .button-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-top: 12px;
-    }
+    .button-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 
     textarea {
       width: 100%;
@@ -170,21 +137,10 @@
       overflow-wrap: anywhere;
     }
 
-    a {
-      color: var(--primary);
-      font-weight: 700;
-      text-decoration: none;
-    }
-
+    a { color: var(--primary); font-weight: 700; text-decoration: none; }
     a:hover { text-decoration: underline; }
 
-    .help-list {
-      margin: 8px 0 0;
-      padding-left: 18px;
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.5;
-    }
+    .help-list { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; line-height: 1.5; }
 
     @media (max-width: 900px) {
       .grid { grid-template-columns: 1fr; }
@@ -194,63 +150,53 @@
 <body>
   <header>
     <h1>MCP Server - Brazil Politicians</h1>
-    <p>Tela técnica para verificar status, endpoint MCP e enviar requisições JSON-RPC de teste.</p>
+    <p>Tela técnica para verificar status e testar as ferramentas expostas pelo servidor.</p>
   </header>
 
   <main>
     <section class="card">
       <h2>Status do servidor</h2>
-      <div class="status-row">
-        <div class="label">Health</div>
-        <div id="healthStatus" class="value"><span class="badge">carregando</span></div>
-      </div>
-      <div class="status-row">
-        <div class="label">MCP endpoint</div>
-        <div id="mcpEndpoint" class="value">-</div>
-      </div>
-      <div class="status-row">
-        <div class="label">Chat endpoint</div>
-        <div id="chatEndpoint" class="value">-</div>
-      </div>
-      <div class="status-row">
-        <div class="label">Provider</div>
-        <div id="chatProvider" class="value">-</div>
-      </div>
-      <div class="status-row">
-        <div class="label">Transporte</div>
-        <div id="transport" class="value">-</div>
-      </div>
+      <div class="status-row"><div class="label">Health</div><div id="healthStatus" class="value"><span class="badge">carregando</span></div></div>
+      <div class="status-row"><div class="label">MCP endpoint real</div><div id="mcpEndpoint" class="value">-</div></div>
+      <div class="status-row"><div class="label">API diagnóstico</div><div class="value">/api/mcp/tools e /api/mcp/tools/call</div></div>
+      <div class="status-row"><div class="label">Chat endpoint</div><div id="chatEndpoint" class="value">-</div></div>
+      <div class="status-row"><div class="label">Provider</div><div id="chatProvider" class="value">-</div></div>
+      <div class="status-row"><div class="label">Transporte</div><div id="transport" class="value">-</div></div>
       <div class="button-row">
         <button type="button" onclick="loadStatus()">Recarregar status</button>
+        <button type="button" onclick="loadTools()">Listar ferramentas</button>
         <a href="/">Voltar para o chat</a>
       </div>
+      <p class="muted">
+        Esta página usa endpoints REST de diagnóstico para evitar erro 405 do transporte MCP direto no browser.
+        O endpoint MCP real continua disponível em <strong id="mcpEndpointInline">/mcp</strong> para clientes MCP compatíveis.
+      </p>
     </section>
 
     <section class="grid">
       <div class="card">
         <h2>Chamadas rápidas</h2>
-        <p class="muted">
-          Use estes botões para preencher o payload. Depois clique em <strong>Enviar para MCP</strong>.
-        </p>
+        <p class="muted">Use estes botões para preencher o payload. Depois clique em <strong>Executar ferramenta</strong>.</p>
         <div class="button-row">
-          <button type="button" onclick="setInitializePayload()">initialize</button>
-          <button type="button" onclick="setToolsListPayload()">tools/list</button>
+          <button type="button" onclick="loadTools()">tools/list</button>
           <button type="button" onclick="setSearchDeputadosPayload()">search_deputados</button>
+          <button type="button" onclick="setDeputadoDespesasPayload()">get_deputado_despesas</button>
+          <button type="button" onclick="setDeputadoVotacoesPayload()">get_deputado_votacoes</button>
           <button type="button" onclick="setSearchProposicoesPayload()">search_proposicoes</button>
         </div>
 
         <ul class="help-list">
-          <li><strong>initialize</strong>: handshake básico MCP.</li>
-          <li><strong>tools/list</strong>: lista ferramentas expostas pelo servidor.</li>
-          <li><strong>tools/call</strong>: executa uma ferramenta MCP específica.</li>
+          <li><strong>tools/list</strong>: chama <code>/api/mcp/tools</code>.</li>
+          <li><strong>tools/call</strong>: chama <code>/api/mcp/tools/call</code>.</li>
+          <li>Para testar o transporte MCP real, use um cliente MCP compatível, não esta tela.</li>
         </ul>
       </div>
 
       <div class="card">
-        <h2>Payload JSON-RPC</h2>
+        <h2>Payload da ferramenta</h2>
         <textarea id="payload"></textarea>
         <div class="button-row">
-          <button id="sendButton" type="button" onclick="sendMcpRequest()">Enviar para MCP</button>
+          <button id="sendButton" type="button" onclick="sendToolCall()">Executar ferramenta</button>
           <button type="button" onclick="formatPayload()">Formatar JSON</button>
           <button type="button" onclick="clearResponse()">Limpar resposta</button>
         </div>
@@ -265,10 +211,10 @@
 
   <script>
     let mcpEndpoint = "/mcp";
-    let requestId = 1;
 
     const healthStatusEl = document.getElementById("healthStatus");
     const mcpEndpointEl = document.getElementById("mcpEndpoint");
+    const mcpEndpointInlineEl = document.getElementById("mcpEndpointInline");
     const chatEndpointEl = document.getElementById("chatEndpoint");
     const chatProviderEl = document.getElementById("chatProvider");
     const transportEl = document.getElementById("transport");
@@ -277,7 +223,7 @@
     const sendButtonEl = document.getElementById("sendButton");
 
     loadStatus();
-    setToolsListPayload();
+    setSearchDeputadosPayload();
 
     async function loadStatus() {
       healthStatusEl.innerHTML = '<span class="badge">carregando</span>';
@@ -286,13 +232,12 @@
         const response = await fetch("/health", { headers: { "Accept": "application/json" } });
         const data = await response.json();
 
-        if (!response.ok) {
-          throw new Error(JSON.stringify(data));
-        }
+        if (!response.ok) throw new Error(JSON.stringify(data));
 
         mcpEndpoint = data.mcpEndpoint || mcpEndpoint;
         healthStatusEl.innerHTML = '<span class="badge ok">online</span>';
         mcpEndpointEl.textContent = mcpEndpoint;
+        mcpEndpointInlineEl.textContent = mcpEndpoint;
         chatEndpointEl.textContent = data.chatEndpoint || "-";
         chatProviderEl.textContent = data.chatProvider || "-";
         transportEl.textContent = data.transport + " / stateless=" + data.stateless;
@@ -302,69 +247,35 @@
       }
     }
 
-    function setInitializePayload() {
-      setPayload({
-        jsonrpc: "2.0",
-        id: nextId(),
-        method: "initialize",
-        params: {
-          protocolVersion: "2024-11-05",
-          capabilities: {},
-          clientInfo: {
-            name: "mcp-brazil-politicians-web-tester",
-            version: "1.0.0"
-          }
-        }
-      });
-    }
-
-    function setToolsListPayload() {
-      setPayload({
-        jsonrpc: "2.0",
-        id: nextId(),
-        method: "tools/list",
-        params: {}
-      });
+    async function loadTools() {
+      responseEl.textContent = "Carregando ferramentas...";
+      try {
+        const response = await fetch("/api/mcp/tools", { headers: { "Accept": "application/json" } });
+        const payload = await readResponse(response);
+        responseEl.textContent = payload;
+      } catch (error) {
+        responseEl.textContent = "Erro ao carregar ferramentas:\n" + error.message;
+      }
     }
 
     function setSearchDeputadosPayload() {
-      setPayload({
-        jsonrpc: "2.0",
-        id: nextId(),
-        method: "tools/call",
-        params: {
-          name: "search_deputados",
-          arguments: {
-            nome: "Erika Hilton",
-            pagina: 1,
-            itens: 10
-          }
-        }
-      });
+      setPayload({ name: "search_deputados", arguments: { nome: "Erika Hilton", pagina: "1", itens: "10" } });
+    }
+
+    function setDeputadoDespesasPayload() {
+      setPayload({ name: "get_deputado_despesas", arguments: { idDeputado: "220645", pagina: "1", itens: "10" } });
+    }
+
+    function setDeputadoVotacoesPayload() {
+      setPayload({ name: "get_deputado_votacoes", arguments: { idDeputado: "220645", pagina: "1", itens: "10" } });
     }
 
     function setSearchProposicoesPayload() {
-      setPayload({
-        jsonrpc: "2.0",
-        id: nextId(),
-        method: "tools/call",
-        params: {
-          name: "search_proposicoes",
-          arguments: {
-            keywords: "escala 6x1",
-            pagina: 1,
-            itens: 10
-          }
-        }
-      });
+      setPayload({ name: "search_proposicoes", arguments: { keywords: "escala 6x1", pagina: "1", itens: "10" } });
     }
 
     function setPayload(value) {
       payloadEl.value = JSON.stringify(value, null, 2);
-    }
-
-    function nextId() {
-      return requestId++;
     }
 
     function formatPayload() {
@@ -379,7 +290,7 @@
       responseEl.textContent = "Aguardando requisição...";
     }
 
-    async function sendMcpRequest() {
+    async function sendToolCall() {
       let payload;
       try {
         payload = JSON.parse(payloadEl.value);
@@ -389,41 +300,45 @@
       }
 
       sendButtonEl.disabled = true;
-      responseEl.textContent = "Enviando para " + mcpEndpoint + "...";
+      responseEl.textContent = "Enviando para /api/mcp/tools/call...";
 
       try {
-        const response = await fetch(mcpEndpoint, {
+        const response = await fetch("/api/mcp/tools/call", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "Accept": "application/json, text/event-stream"
+            "Accept": "application/json"
           },
           body: JSON.stringify(payload)
         });
 
-        const contentType = response.headers.get("content-type") || "";
-        const rawText = await response.text();
-
-        let parsed = rawText;
-        if (contentType.includes("application/json")) {
-          try {
-            parsed = JSON.stringify(JSON.parse(rawText), null, 2);
-          } catch {
-            parsed = rawText;
-          }
-        }
-
-        responseEl.textContent = [
-          "HTTP " + response.status + " " + response.statusText,
-          "Content-Type: " + contentType,
-          "",
-          parsed || "<sem corpo>"
-        ].join("\n");
+        responseEl.textContent = await readResponse(response);
       } catch (error) {
-        responseEl.textContent = "Erro ao enviar requisição MCP:\n" + error.message;
+        responseEl.textContent = "Erro ao executar ferramenta:\n" + error.message;
       } finally {
         sendButtonEl.disabled = false;
       }
+    }
+
+    async function readResponse(response) {
+      const contentType = response.headers.get("content-type") || "";
+      const rawText = await response.text();
+
+      let body = rawText || "<sem corpo>";
+      if (contentType.includes("application/json")) {
+        try {
+          body = JSON.stringify(JSON.parse(rawText), null, 2);
+        } catch {
+          body = rawText;
+        }
+      }
+
+      return [
+        "HTTP " + response.status + " " + response.statusText,
+        "Content-Type: " + contentType,
+        "",
+        body
+      ].join("\n");
     }
   </script>
 </body>
