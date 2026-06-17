@@ -5,19 +5,14 @@ namespace McpBrazilPoliticians.Services;
 
 public sealed class CamaraToolExecutionService
 {
-    private const string DefaultCamaraBaseUrl = "https://dadosabertos.camara.leg.br/api/v2/";
-
-    private readonly IHttpClientFactory _httpClientFactory;
-    private readonly IConfiguration _configuration;
+    private readonly CamaraApiClient _camaraApiClient;
     private readonly ILogger<CamaraToolExecutionService> _logger;
 
     public CamaraToolExecutionService(
-        IHttpClientFactory httpClientFactory,
-        IConfiguration configuration,
+        CamaraApiClient camaraApiClient,
         ILogger<CamaraToolExecutionService> logger)
     {
-        _httpClientFactory = httpClientFactory;
-        _configuration = configuration;
+        _camaraApiClient = camaraApiClient;
         _logger = logger;
     }
 
@@ -27,34 +22,14 @@ public sealed class CamaraToolExecutionService
         CancellationToken cancellationToken)
     {
         var (path, query) = BuildRequest(tool, arguments);
-        var requestUri = BuildUri(GetString("CamaraApi:BaseUrl", "CAMARA_API_BASE_URL", DefaultCamaraBaseUrl), path, query);
 
         _logger.LogInformation(
-            "Executing Camara tool. Tool={Tool}, Path={Path}, Query={Query}, Url={Url}",
+            "Executing Camara tool. Tool={Tool}, Path={Path}, Query={Query}",
             tool,
             path,
-            JsonSerializer.Serialize(query),
-            requestUri);
+            JsonSerializer.Serialize(query));
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
-        request.Headers.Accept.ParseAdd("application/json");
-
-        var httpClient = _httpClientFactory.CreateClient();
-        using var response = await httpClient.SendAsync(request, cancellationToken);
-        var responseText = await response.Content.ReadAsStringAsync(cancellationToken);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            _logger.LogWarning(
-                "Camara tool returned non-success status. Tool={Tool}, StatusCode={StatusCode}, Body={Body}",
-                tool,
-                (int)response.StatusCode,
-                Truncate(responseText));
-
-            throw new InvalidOperationException($"Erro HTTP {(int)response.StatusCode} ao executar a ferramenta '{tool}' na API da Câmara: {responseText}");
-        }
-
-        return JsonDocument.Parse(responseText);
+        return await _camaraApiClient.GetJsonAsync(path, query, cancellationToken);
     }
 
     private static (string Path, IReadOnlyDictionary<string, string?> Query) BuildRequest(
@@ -125,28 +100,6 @@ public sealed class CamaraToolExecutionService
         };
     }
 
-    private string GetString(string configurationKey, string environmentKey, string defaultValue)
-    {
-        var configurationValue = _configuration[configurationKey];
-        if (!string.IsNullOrWhiteSpace(configurationValue))
-        {
-            return configurationValue;
-        }
-
-        var environmentValue = Environment.GetEnvironmentVariable(environmentKey);
-        return string.IsNullOrWhiteSpace(environmentValue) ? defaultValue : environmentValue;
-    }
-
-    private static Uri BuildUri(string baseUrl, string relativePath, IReadOnlyDictionary<string, string?> query)
-    {
-        var builder = new UriBuilder(new Uri(new Uri(EnsureTrailingSlash(baseUrl)), relativePath));
-        builder.Query = string.Join("&", query
-            .Where(item => !string.IsNullOrWhiteSpace(item.Value))
-            .Select(item => $"{Uri.EscapeDataString(item.Key)}={Uri.EscapeDataString(item.Value!)}"));
-
-        return builder.Uri;
-    }
-
     private static string Required(IReadOnlyDictionary<string, string?> arguments, string key)
     {
         return arguments.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
@@ -185,12 +138,4 @@ public sealed class CamaraToolExecutionService
     }
 
     private static IReadOnlyDictionary<string, string?> EmptyQuery() => new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-
-    private static string EnsureTrailingSlash(string value) => value.EndsWith('/') ? value : value + "/";
-
-    private static string Truncate(string value)
-    {
-        const int maxChars = 2000;
-        return value.Length <= maxChars ? value : value[..maxChars] + "\n... log truncado ...";
-    }
 }
