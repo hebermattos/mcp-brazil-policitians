@@ -68,13 +68,16 @@ public sealed class GenericChatPlanQueryService
         var defaultItems = GetInt("Chat:DefaultSearchItems", "CHAT_DEFAULT_SEARCH_ITEMS", 10, 1, 100);
         var maxSteps = GetInt("Chat:GenericPlanner:MaxSteps", "CHAT_GENERIC_PLANNER_MAX_STEPS", 5, 1, 10);
 
-        var systemPrompt = $$"""
+        var systemPrompt = """
 Você é um planejador de chamadas para a API da Câmara. Retorne somente JSON válido.
 Formato: {"steps":[{"tool":"nome","arguments":{},"saveAs":"resultado"}],"finalResult":"resultado"}.
 Ferramentas: search_deputados, get_deputado, get_deputado_despesas, get_deputado_discursos, get_deputado_eventos, get_deputado_frentes, get_deputado_orgaos, get_deputado_profissoes, get_deputado_votacoes, search_proposicoes, get_proposicao, get_proposicao_autores, get_proposicao_relacionadas, get_proposicao_temas, get_proposicao_tramitacoes, get_proposicao_votacoes, search_votacoes, get_votacao, get_votacao_orientacoes, get_votacao_votos, search_eventos, get_evento, search_orgaos, get_orgao, search_partidos, get_partido, search_frentes, search_grupos, search_legislaturas, search_blocos, search_referencias, camara_api_get.
-Regras: não invente IDs; se precisar de ID, crie etapa anterior; use referências como {{proposicao.dados[0].id}}; para última/mais recente use ordem DESC; página padrão {{defaultPage}}; itens padrão {{defaultItems}}; máximo {{maxSteps}} etapas.
+Regras: não invente IDs; se precisar de ID, crie etapa anterior; use referências como {{proposicao.dados[0].id}}; para última/mais recente use ordem DESC; página padrão __DEFAULT_PAGE__; itens padrão __DEFAULT_ITEMS__; máximo __MAX_STEPS__ etapas.
 Padrões importantes: votos de deputados de uma proposição => search_proposicoes -> get_proposicao_votacoes -> get_votacao_votos. Despesas por nome de deputado => search_deputados -> get_deputado_despesas. Proposições por assunto => search_proposicoes com keywords. Últimas votações => search_votacoes com ordem DESC e ordenarPor dataHoraRegistro.
-""";
+"""
+            .Replace("__DEFAULT_PAGE__", defaultPage.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
+            .Replace("__DEFAULT_ITEMS__", defaultItems.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
+            .Replace("__MAX_STEPS__", maxSteps.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal);
 
         try
         {
