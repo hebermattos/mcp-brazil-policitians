@@ -101,65 +101,9 @@ public sealed class ChainedOpenAiChatService
         try
         {
             var plannedRequest = await CreatePlannedRequestAsync(prompt, promptLog, cancellationToken);
-
-            ChatPromptResponse response;
-            if (plannedRequest.ExecutionPlan is not null)
-            {
-                var executedPlan = await _planExecutorService.ExecuteAsync(plannedRequest.ExecutionPlan, cancellationToken);
-                var finalArguments = executedPlan.FinalArguments;
-                var answerData = JsonSerializer.Serialize(new
-                {
-                    finalData = executedPlan.FinalData,
-                    stepResults = executedPlan.StepResults
-                }, _jsonOptions);
-
-                var answer = await CreateFinalAnswerAsync(
-                    prompt,
-                    executedPlan.FinalTool,
-                    finalArguments,
-                    answerData,
-                    promptLog,
-                    cancellationToken);
-
-                response = new ChatPromptResponse(
-                    answer,
-                    executedPlan.FinalTool,
-                    finalArguments,
-                    executedPlan.FinalData,
-                    promptLog?.FilePath);
-            }
-            else if (plannedRequest.ToolPlan is not null)
-            {
-                using var data = await _toolExecutionService.ExecuteAsync(
-                    plannedRequest.ToolPlan.Tool,
-                    plannedRequest.ToolPlan.Arguments,
-                    cancellationToken);
-
-                var finalData = data.RootElement.Clone();
-                var finalArguments = plannedRequest.ToolPlan.Arguments.ToDictionary(
-                    item => item.Key,
-                    item => (object?)item.Value,
-                    StringComparer.OrdinalIgnoreCase);
-
-                var answer = await CreateFinalAnswerAsync(
-                    prompt,
-                    plannedRequest.ToolPlan.Tool,
-                    finalArguments,
-                    finalData.GetRawText(),
-                    promptLog,
-                    cancellationToken);
-
-                response = new ChatPromptResponse(
-                    answer,
-                    plannedRequest.ToolPlan.Tool,
-                    finalArguments,
-                    finalData,
-                    promptLog?.FilePath);
-            }
-            else
-            {
-                throw new InvalidOperationException("O modelo não retornou um plano de ferramenta válido.");
-            }
+            var response = plannedRequest.ExecutionPlan is not null
+                ? await ExecuteChainedPlanAsync(prompt, plannedRequest.ExecutionPlan, promptLog, cancellationToken)
+                : await ExecuteSingleToolPlanAsync(prompt, plannedRequest.ToolPlan!, promptLog, cancellationToken);
 
             stopwatch.Stop();
             _promptFileLogService.Complete(promptLog, new
@@ -180,6 +124,68 @@ public sealed class ChainedOpenAiChatService
             _promptFileLogService.Fail(promptLog, ex, new { provider, elapsedMs = stopwatch.ElapsedMilliseconds });
             throw;
         }
+    }
+
+    private async Task<ChatPromptResponse> ExecuteChainedPlanAsync(
+        string prompt,
+        ChatExecutionPlan executionPlan,
+        PromptFileLogContext? promptLog,
+        CancellationToken cancellationToken)
+    {
+        var executedPlan = await _planExecutorService.ExecuteAsync(executionPlan, cancellationToken);
+        var answerData = JsonSerializer.Serialize(new
+        {
+            finalData = executedPlan.FinalData,
+            stepResults = executedPlan.StepResults
+        }, _jsonOptions);
+
+        var answer = await CreateFinalAnswerAsync(
+            prompt,
+            executedPlan.FinalTool,
+            executedPlan.FinalArguments,
+            answerData,
+            promptLog,
+            cancellationToken);
+
+        return new ChatPromptResponse(
+            answer,
+            executedPlan.FinalTool,
+            executedPlan.FinalArguments,
+            executedPlan.FinalData,
+            promptLog?.FilePath);
+    }
+
+    private async Task<ChatPromptResponse> ExecuteSingleToolPlanAsync(
+        string prompt,
+        ToolPlan toolPlan,
+        PromptFileLogContext? promptLog,
+        CancellationToken cancellationToken)
+    {
+        using var data = await _toolExecutionService.ExecuteAsync(
+            toolPlan.Tool,
+            toolPlan.Arguments,
+            cancellationToken);
+
+        var finalData = data.RootElement.Clone();
+        var finalArguments = toolPlan.Arguments.ToDictionary(
+            item => item.Key,
+            item => (object?)item.Value,
+            StringComparer.OrdinalIgnoreCase);
+
+        var answer = await CreateFinalAnswerAsync(
+            prompt,
+            toolPlan.Tool,
+            finalArguments,
+            finalData.GetRawText(),
+            promptLog,
+            cancellationToken);
+
+        return new ChatPromptResponse(
+            answer,
+            toolPlan.Tool,
+            finalArguments,
+            finalData,
+            promptLog?.FilePath);
     }
 
     private async Task<PlannedRequest> CreatePlannedRequestAsync(string prompt, PromptFileLogContext? promptLog, CancellationToken cancellationToken)
@@ -209,17 +215,9 @@ public sealed class ChainedOpenAiChatService
             content = _promptFileLogService.GetOptionalLogText("Logging:PromptFile:IncludeModelResponses", "LOG_PROMPT_FILE_INCLUDE_MODEL_RESPONSES", content)
         });
 
-        try
-        {
-            var plannedRequest = ParsePlannedRequest(content, defaultPage, defaultItems);
-            _promptFileLogService.Append(promptLog, "tool-plan.normalized", plannedRequest);
-            return plannedRequest;
-        }
-        catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
-        {
-            _logger.LogWarning(ex, "Invalid tool plan returned by model. Content={Content}", content);
-            throw new InvalidOperationException("Não foi possível interpretar o plano de ferramenta retornado pelo modelo.", ex);
-        }
+        var plannedRequest = ParsePlannedRequest(content, defaultPage, defaultItems);
+        _promptFileLogService.Append(promptLog, "tool-plan.normalized", plannedRequest);
+        return plannedRequest;
     }
 
     private PlannedRequest ParsePlannedRequest(string content, int defaultPage, int defaultItems)
@@ -236,7 +234,6 @@ public sealed class ChainedOpenAiChatService
                 var tool = NormalizeToolName(RequiredString(stepElement, "tool"));
                 var arguments = NormalizeArguments(tool, ReadArguments(stepElement), defaultPage, defaultItems);
                 var saveAs = OptionalString(stepElement, "saveAs") ?? OptionalString(stepElement, "save_as");
-
                 steps.Add(new ChatExecutionStep(tool, arguments, saveAs));
             }
 
@@ -761,8 +758,8 @@ Resposta:
 
     private static string ExtractJsonObject(string content)
     {
-        var start = content.IndexOf('{', StringComparison.Ordinal);
-        var end = content.LastIndexOf('}', StringComparison.Ordinal);
+        var start = content.IndexOf("{", StringComparison.Ordinal);
+        var end = content.LastIndexOf("}", StringComparison.Ordinal);
 
         if (start < 0 || end <= start)
         {
@@ -806,7 +803,6 @@ Resposta:
     {
         return argumentName.Trim() switch
         {
-            "id" => "idDeputado",
             "uf" => "siglaUf",
             "partido" => "siglaPartido",
             "tipo" => "siglaTipo",
