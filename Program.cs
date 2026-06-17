@@ -79,6 +79,7 @@ try
     builder.Services.AddScoped<CamaraJsonPathResolver>();
     builder.Services.AddScoped<CamaraToolExecutionService>();
     builder.Services.AddScoped<ChatPlanExecutorService>();
+    builder.Services.AddScoped<LatestPropositionVotingQueryService>();
     builder.Services.AddScoped<DirectChatQueryService>();
     builder.Services.AddScoped<OpenAiChatService>();
 
@@ -168,6 +169,7 @@ try
     app.MapPost(chatEndpoint, async (
         ChatPromptRequest request,
         OpenAiChatService chatService,
+        LatestPropositionVotingQueryService latestPropositionVotingQueryService,
         DirectChatQueryService directQueryService,
         ChatResponseFormatterService responseFormatter,
         ILogger<Program> logger,
@@ -190,6 +192,18 @@ try
 
         try
         {
+            var latestPropositionVotingResponse = await latestPropositionVotingQueryService.TryHandleAsync(request.Prompt, cancellationToken);
+            if (latestPropositionVotingResponse is not null)
+            {
+                var formattedResponse = responseFormatter.Format(latestPropositionVotingResponse);
+                logger.LogInformation(
+                    "Chat endpoint completed with latest proposition voting handler. Tool={Tool}, Arguments={Arguments}",
+                    formattedResponse.Tool,
+                    formattedResponse.Arguments);
+
+                return Results.Ok(formattedResponse);
+            }
+
             var directResponse = await directQueryService.TryHandleAsync(request.Prompt, cancellationToken);
             if (directResponse is not null)
             {
@@ -203,9 +217,9 @@ try
             }
 
             var response = await chatService.GetAnswerAsync(request.Prompt, cancellationToken);
-            var formattedResponse = responseFormatter.Format(response);
-            logger.LogInformation("Chat endpoint completed. Tool={Tool}, PromptLogFile={PromptLogFile}", formattedResponse.Tool, formattedResponse.LogFilePath);
-            return Results.Ok(formattedResponse);
+            var formattedResponseFromModel = responseFormatter.Format(response);
+            logger.LogInformation("Chat endpoint completed. Tool={Tool}, PromptLogFile={PromptLogFile}", formattedResponseFromModel.Tool, formattedResponseFromModel.LogFilePath);
+            return Results.Ok(formattedResponseFromModel);
         }
         catch (InvalidOperationException ex)
         {
