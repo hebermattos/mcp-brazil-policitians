@@ -18,6 +18,8 @@
       --assistant-border: #d1d5db;
       --error: #991b1b;
       --error-bg: #fee2e2;
+      --success: #166534;
+      --success-bg: #dcfce7;
       --code-bg: #0f172a;
       --code-text: #e5e7eb;
     }
@@ -73,7 +75,7 @@
 
     .message-row { display: flex; }
     .message-row.user { justify-content: flex-end; }
-    .message-row.assistant, .message-row.system { justify-content: flex-start; }
+    .message-row.assistant, .message-row.system, .message-row.progress { justify-content: flex-start; }
 
     .bubble {
       max-width: 82%;
@@ -103,6 +105,59 @@
       border: 1px dashed var(--border);
       font-size: 14px;
     }
+
+    .progress .bubble {
+      background: #f8fafc;
+      border: 1px solid #cbd5e1;
+      border-bottom-left-radius: 4px;
+      color: #334155;
+      min-width: min(520px, 82%);
+    }
+
+    .progress-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .progress-title.done { color: var(--success); }
+    .progress-title.failed { color: var(--error); }
+
+    .spinner {
+      width: 13px;
+      height: 13px;
+      border: 2px solid #cbd5e1;
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      display: inline-block;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .progress-meta {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+
+    .progress-list {
+      margin: 0;
+      padding-left: 18px;
+      font-size: 13px;
+      white-space: normal;
+    }
+
+    .progress-list li {
+      margin: 4px 0;
+    }
+
+    .progress-list .ok { color: var(--success); }
+    .progress-list .fail { color: var(--error); }
 
     .error .bubble {
       background: var(--error-bg);
@@ -170,6 +225,7 @@
 
     @media (max-width: 640px) {
       .bubble { max-width: 94%; }
+      .progress .bubble { min-width: 94%; }
       form { padding: 10px; }
       button { padding: 0 14px; }
     }
@@ -249,7 +305,13 @@
       addMessage("user", prompt);
       setBusy(true);
 
+      const progress = addProgressLog(prompt);
+
       try {
+        progress.add("Enviando prompt para " + chatEndpoint + ".");
+
+        const estimatedTimers = startEstimatedProgress(progress);
+
         const response = await fetch(chatEndpoint, {
           method: "POST",
           headers: {
@@ -259,25 +321,133 @@
           body: JSON.stringify({ prompt })
         });
 
+        stopEstimatedProgress(estimatedTimers);
+        progress.add("Resposta HTTP recebida: " + response.status + ".");
+
         const rawText = await response.text();
+        progress.add("Lendo resposta do backend. Tamanho: " + rawText.length + " caracteres.");
+
         let payload;
         try {
           payload = rawText ? JSON.parse(rawText) : null;
+          progress.add("Resposta JSON interpretada com sucesso.");
         } catch {
           payload = { answer: rawText };
+          progress.add("Resposta não era JSON; tratando como texto.");
         }
 
         if (!response.ok) {
           const message = payload?.detail || payload?.title || payload?.error || rawText || "Erro desconhecido.";
+          progress.fail("Erro retornado pelo backend: " + message);
           throw new Error(message);
         }
 
+        if (payload?.tool) {
+          progress.add("Ferramenta escolhida: " + payload.tool + ".");
+        }
+
+        if (payload?.arguments) {
+          progress.add("Argumentos usados: " + JSON.stringify(payload.arguments) + ".");
+        }
+
+        progress.done("Processamento concluído.");
         addAssistantResponse(payload);
       } catch (error) {
+        progress.fail("Falha ao processar o prompt.");
         addMessage("assistant error", "Erro ao processar o prompt.\n\n" + error.message);
       } finally {
         setBusy(false);
       }
+    }
+
+    function startEstimatedProgress(progress) {
+      const timers = [];
+
+      timers.push(setTimeout(() => {
+        progress.add("Pensando: " + chatProvider + " está analisando a intenção do prompt.");
+      }, 400));
+
+      timers.push(setTimeout(() => {
+        progress.add("Planejando consulta: selecionando ferramenta e normalizando argumentos.");
+      }, 1200));
+
+      timers.push(setTimeout(() => {
+        progress.add("Consultando dados públicos da Câmara dos Deputados.");
+      }, 2400));
+
+      timers.push(setTimeout(() => {
+        progress.add("Gerando resposta final em português com base nos dados retornados.");
+      }, 4200));
+
+      timers.push(setTimeout(() => {
+        progress.add("Ainda processando. Modelos locais podem demorar mais dependendo do hardware.");
+      }, 8000));
+
+      return timers;
+    }
+
+    function stopEstimatedProgress(timers) {
+      for (const timer of timers) {
+        clearTimeout(timer);
+      }
+    }
+
+    function addProgressLog(prompt) {
+      const row = document.createElement("div");
+      row.className = "message-row progress";
+
+      const bubble = document.createElement("div");
+      bubble.className = "bubble";
+
+      const title = document.createElement("div");
+      title.className = "progress-title";
+      title.innerHTML = "<span class=\"spinner\"></span><span>Pensando...</span>";
+
+      const meta = document.createElement("div");
+      meta.className = "progress-meta";
+
+      const list = document.createElement("ol");
+      list.className = "progress-list";
+
+      bubble.appendChild(title);
+      bubble.appendChild(meta);
+      bubble.appendChild(list);
+      row.appendChild(bubble);
+      messagesEl.appendChild(row);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+
+      const startedAt = Date.now();
+      const elapsedTimer = setInterval(() => {
+        meta.textContent = "Tempo decorrido: " + formatElapsed(Date.now() - startedAt) + ". Prompt: “" + truncateText(prompt, 80) + "”";
+      }, 250);
+
+      const add = (text, cssClass) => {
+        const item = document.createElement("li");
+        if (cssClass) item.className = cssClass;
+        item.textContent = timestamp() + " " + text;
+        list.appendChild(item);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      };
+
+      add("Prompt recebido pela interface.");
+
+      return {
+        add,
+        done: text => {
+          clearInterval(elapsedTimer);
+          title.className = "progress-title done";
+          title.innerHTML = "✓ " + escapeHtml(text);
+          meta.textContent = "Tempo total: " + formatElapsed(Date.now() - startedAt) + ".";
+          add(text, "ok");
+        },
+        fail: text => {
+          clearInterval(elapsedTimer);
+          title.className = "progress-title failed";
+          title.textContent = "Falhou";
+          meta.textContent = "Tempo até a falha: " + formatElapsed(Date.now() - startedAt) + ".";
+          add(text, "fail");
+        }
+      };
     }
 
     function addAssistantResponse(payload) {
@@ -314,7 +484,25 @@
     function setBusy(isBusy) {
       sendButtonEl.disabled = isBusy;
       promptEl.disabled = isBusy;
-      statusEl.textContent = isBusy ? "Consultando " + chatProvider + " e Câmara..." : "Chat pronto. Provedor: " + chatProvider + ".";
+      statusEl.textContent = isBusy ? "Pensando com " + chatProvider + "..." : "Chat pronto. Provedor: " + chatProvider + ".";
+    }
+
+    function timestamp() {
+      return new Date().toLocaleTimeString("pt-BR", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit"
+      });
+    }
+
+    function formatElapsed(milliseconds) {
+      const seconds = milliseconds / 1000;
+      return seconds.toFixed(seconds < 10 ? 1 : 0) + "s";
+    }
+
+    function truncateText(value, maxLength) {
+      const text = String(value || "");
+      return text.length <= maxLength ? text : text.substring(0, maxLength) + "...";
     }
 
     function escapeHtml(value) {
