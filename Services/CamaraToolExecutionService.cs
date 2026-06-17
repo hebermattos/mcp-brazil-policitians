@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text.Json;
 
 namespace McpBrazilPoliticians.Services;
@@ -66,7 +65,7 @@ public sealed class CamaraToolExecutionService
         {
             "search_deputados" => ("deputados", WithoutEmptyValues(arguments)),
             "get_deputado" => ($"deputados/{Required(arguments, "idDeputado")}", EmptyQuery()),
-            "get_deputado_despesas" => ($"deputados/{Required(arguments, "idDeputado")}/despesas", RemoveIdentifier(arguments, "idDeputado")),
+            "get_deputado_despesas" => ($"deputados/{Required(arguments, "idDeputado")}/despesas", RemoveArguments(arguments, "idDeputado", "nome")),
             "search_proposicoes" => ("proposicoes", WithoutEmptyValues(arguments)),
             "get_proposicao" => ($"proposicoes/{Required(arguments, "idProposicao")}", EmptyQuery()),
             "search_eventos" => ("eventos", WithoutEmptyValues(arguments)),
@@ -104,10 +103,11 @@ public sealed class CamaraToolExecutionService
             : throw new InvalidOperationException($"O argumento obrigatório '{key}' não foi informado.");
     }
 
-    private static IReadOnlyDictionary<string, string?> RemoveIdentifier(IReadOnlyDictionary<string, string?> arguments, string key)
+    private static IReadOnlyDictionary<string, string?> RemoveArguments(IReadOnlyDictionary<string, string?> arguments, params string[] keys)
     {
+        var keySet = new HashSet<string>(keys, StringComparer.OrdinalIgnoreCase);
         return arguments
-            .Where(item => !item.Key.Equals(key, StringComparison.OrdinalIgnoreCase))
+            .Where(item => !keySet.Contains(item.Key))
             .Where(item => !string.IsNullOrWhiteSpace(item.Value))
             .ToDictionary(item => item.Key, item => item.Value, StringComparer.OrdinalIgnoreCase);
     }
