@@ -4,96 +4,154 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Serilog;
 
-var builder = WebApplication.CreateBuilder(args);
+Log.Logger = new LoggerConfiguration()
+    .MinimumLevel.Information()
+    .WriteTo.Console()
+    .CreateBootstrapLogger();
 
-var configuration = builder.Configuration;
-var mcpEndpoint = NormalizeEndpoint(GetStringSetting(configuration, "Mcp:Endpoint", "MCP_ENDPOINT", "/mcp"));
-var chatEndpoint = NormalizeEndpoint(GetStringSetting(configuration, "Chat:Endpoint", "CHAT_ENDPOINT", "/api/chat"));
-var mcpStateless = GetBoolSetting(configuration, "Mcp:Stateless", "MCP_STATELESS", defaultValue: true);
-var allowAnyOrigin = GetBoolSetting(configuration, "Cors:AllowAnyOrigin", "CORS_ALLOW_ANY_ORIGIN", defaultValue: true);
-var exposedHeaders = GetStringArraySetting(configuration, "Cors:ExposedHeaders", ["Mcp-Session-Id"]);
-var allowedOrigins = GetStringArraySetting(configuration, "Cors:AllowedOrigins", []);
-
-builder.Services.AddCors(options =>
+try
 {
-    options.AddPolicy("McpCors", policy =>
-    {
-        if (allowAnyOrigin || allowedOrigins.Length == 0)
-        {
-            policy.AllowAnyOrigin();
-        }
-        else
-        {
-            policy.WithOrigins(allowedOrigins);
-        }
+    Log.Information("Starting mcp-brazil-policitians");
 
-        policy
-            .AllowAnyMethod()
-            .AllowAnyHeader()
-            .WithExposedHeaders(exposedHeaders);
+    var builder = WebApplication.CreateBuilder(args);
+
+    builder.Host.UseSerilog((context, services, loggerConfiguration) => loggerConfiguration
+        .ReadFrom.Configuration(context.Configuration)
+        .ReadFrom.Services(services)
+        .Enrich.FromLogContext());
+
+    var configuration = builder.Configuration;
+    var mcpEndpoint = NormalizeEndpoint(GetStringSetting(configuration, "Mcp:Endpoint", "MCP_ENDPOINT", "/mcp"));
+    var chatEndpoint = NormalizeEndpoint(GetStringSetting(configuration, "Chat:Endpoint", "CHAT_ENDPOINT", "/api/chat"));
+    var mcpStateless = GetBoolSetting(configuration, "Mcp:Stateless", "MCP_STATELESS", defaultValue: true);
+    var allowAnyOrigin = GetBoolSetting(configuration, "Cors:AllowAnyOrigin", "CORS_ALLOW_ANY_ORIGIN", defaultValue: true);
+    var exposedHeaders = GetStringArraySetting(configuration, "Cors:ExposedHeaders", ["Mcp-Session-Id"]);
+    var allowedOrigins = GetStringArraySetting(configuration, "Cors:AllowedOrigins", []);
+
+    Log.Information(
+        "Effective server settings: McpEndpoint={McpEndpoint}, ChatEndpoint={ChatEndpoint}, McpStateless={McpStateless}, AllowAnyOrigin={AllowAnyOrigin}, AllowedOrigins={AllowedOrigins}, ExposedHeaders={ExposedHeaders}, ChatProvider={ChatProvider}",
+        mcpEndpoint,
+        chatEndpoint,
+        mcpStateless,
+        allowAnyOrigin,
+        allowedOrigins,
+        exposedHeaders,
+        GetStringSetting(configuration, "Chat:Provider", "CHAT_PROVIDER", "ollama"));
+
+    builder.Services.AddCors(options =>
+    {
+        options.AddPolicy("McpCors", policy =>
+        {
+            if (allowAnyOrigin || allowedOrigins.Length == 0)
+            {
+                policy.AllowAnyOrigin();
+            }
+            else
+            {
+                policy.WithOrigins(allowedOrigins);
+            }
+
+            policy
+                .AllowAnyMethod()
+                .AllowAnyHeader()
+                .WithExposedHeaders(exposedHeaders);
+        });
     });
-});
 
-builder.Services.AddHttpClient();
-builder.Services.AddScoped<OpenAiChatService>();
+    builder.Services.AddHttpClient();
+    builder.Services.AddScoped<OpenAiChatService>();
 
-builder.Services
-    .AddMcpServer()
-    .WithHttpTransport(options =>
+    builder.Services
+        .AddMcpServer()
+        .WithHttpTransport(options =>
+        {
+            options.Stateless = mcpStateless;
+        })
+        .WithToolsFromAssembly();
+
+    var app = builder.Build();
+
+    app.UseSerilogRequestLogging(options =>
     {
-        options.Stateless = mcpStateless;
-    })
-    .WithToolsFromAssembly();
+        options.MessageTemplate = "HTTP {RequestMethod} {RequestPath} responded {StatusCode} in {Elapsed:0.0000} ms";
+        options.EnrichDiagnosticContext = (diagnosticContext, httpContext) =>
+        {
+            diagnosticContext.Set("RequestHost", httpContext.Request.Host.Value);
+            diagnosticContext.Set("RequestScheme", httpContext.Request.Scheme);
+            diagnosticContext.Set("RemoteIpAddress", httpContext.Connection.RemoteIpAddress?.ToString());
+            diagnosticContext.Set("UserAgent", httpContext.Request.Headers.UserAgent.ToString());
+        };
+    });
 
-var app = builder.Build();
+    app.UseCors("McpCors");
+    app.UseDefaultFiles();
+    app.UseStaticFiles();
 
-app.UseCors("McpCors");
-app.UseDefaultFiles();
-app.UseStaticFiles();
+    app.MapGet("/health", () => Results.Ok(new
+    {
+        status = "ok",
+        transport = "streamable-http",
+        stateless = mcpStateless,
+        mcpEndpoint,
+        chatEndpoint,
+        clientPage = "/",
+        chatProvider = GetStringSetting(configuration, "Chat:Provider", "CHAT_PROVIDER", "ollama")
+    }));
 
-app.MapGet("/health", () => Results.Ok(new
+    app.MapGet("/api/client-settings", () => Results.Ok(new
+    {
+        chatEndpoint,
+        mcpEndpoint,
+        chatProvider = GetStringSetting(configuration, "Chat:Provider", "CHAT_PROVIDER", "ollama")
+    }));
+
+    app.MapPost(chatEndpoint, async (
+        ChatPromptRequest request,
+        OpenAiChatService chatService,
+        ILogger<Program> logger,
+        CancellationToken cancellationToken) =>
+    {
+        if (string.IsNullOrWhiteSpace(request.Prompt))
+        {
+            logger.LogWarning("Chat request rejected because prompt is empty");
+            return Results.BadRequest(new { error = "O prompt é obrigatório." });
+        }
+
+        logger.LogInformation("Chat endpoint received prompt. PromptLength={PromptLength}", request.Prompt.Length);
+
+        try
+        {
+            var response = await chatService.GetAnswerAsync(request.Prompt, cancellationToken);
+            logger.LogInformation("Chat endpoint completed. Tool={Tool}", response.Tool);
+            return Results.Ok(response);
+        }
+        catch (InvalidOperationException ex)
+        {
+            logger.LogError(ex, "Chat endpoint failed with controlled error");
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status500InternalServerError);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Chat endpoint failed with unexpected error");
+            return Results.Problem("Erro inesperado ao processar o prompt.", statusCode: StatusCodes.Status500InternalServerError);
+        }
+    });
+
+    app.MapMcp(mcpEndpoint);
+
+    await app.RunAsync();
+}
+catch (Exception ex)
 {
-    status = "ok",
-    transport = "streamable-http",
-    stateless = mcpStateless,
-    mcpEndpoint,
-    chatEndpoint,
-    clientPage = "/",
-    chatProvider = GetStringSetting(configuration, "Chat:Provider", "CHAT_PROVIDER", "ollama")
-}));
-
-app.MapGet("/api/client-settings", () => Results.Ok(new
+    Log.Fatal(ex, "Application terminated unexpectedly");
+}
+finally
 {
-    chatEndpoint,
-    mcpEndpoint,
-    chatProvider = GetStringSetting(configuration, "Chat:Provider", "CHAT_PROVIDER", "ollama")
-}));
-
-app.MapPost(chatEndpoint, async (
-    ChatPromptRequest request,
-    OpenAiChatService chatService,
-    CancellationToken cancellationToken) =>
-{
-    if (string.IsNullOrWhiteSpace(request.Prompt))
-    {
-        return Results.BadRequest(new { error = "O prompt é obrigatório." });
-    }
-
-    try
-    {
-        var response = await chatService.GetAnswerAsync(request.Prompt, cancellationToken);
-        return Results.Ok(response);
-    }
-    catch (InvalidOperationException ex)
-    {
-        return Results.Problem(ex.Message, statusCode: StatusCodes.Status500InternalServerError);
-    }
-});
-
-app.MapMcp(mcpEndpoint);
-
-await app.RunAsync();
+    Log.Information("Application is shutting down");
+    await Log.CloseAndFlushAsync();
+}
 
 static string GetStringSetting(IConfiguration configuration, string configurationKey, string environmentKey, string defaultValue)
 {
