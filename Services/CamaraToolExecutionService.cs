@@ -66,6 +66,7 @@ public sealed class CamaraToolExecutionService
             "search_deputados" => ("deputados", WithoutEmptyValues(arguments)),
             "get_deputado" => ($"deputados/{Required(arguments, "idDeputado")}", EmptyQuery()),
             "get_deputado_despesas" => ($"deputados/{Required(arguments, "idDeputado")}/despesas", RemoveArguments(arguments, "idDeputado", "nome")),
+            "get_deputado_votacoes" => ($"deputados/{Required(arguments, "idDeputado")}/votacoes", RemoveArguments(arguments, "idDeputado", "nome")),
             "search_proposicoes" => ("proposicoes", WithoutEmptyValues(arguments)),
             "get_proposicao" => ($"proposicoes/{Required(arguments, "idProposicao")}", EmptyQuery()),
             "search_eventos" => ("eventos", WithoutEmptyValues(arguments)),
