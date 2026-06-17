@@ -340,7 +340,7 @@ JSON retornado pela API da Câmara:
 
     private string GetChatProvider()
     {
-        return (GetConfigurationValue("CHAT_PROVIDER", "Chat:Provider") ?? "openai")
+        return (GetConfigurationValue("CHAT_PROVIDER", "Chat:Provider") ?? "ollama")
             .Trim()
             .ToLowerInvariant();
     }
