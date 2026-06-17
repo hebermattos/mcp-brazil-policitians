@@ -8,6 +8,8 @@ namespace McpBrazilPoliticians.Services;
 public sealed class OpenAiChatService
 {
     private const string DefaultOpenAiModel = "gpt-4.1-mini";
+    private const string DefaultOllamaModel = "llama3.1:8b";
+    private const string DefaultOllamaBaseUrl = "http://localhost:11434";
     private const string DefaultCamaraBaseUrl = "https://dadosabertos.camara.leg.br/api/v2/";
 
     private readonly IHttpClientFactory _httpClientFactory;
@@ -73,11 +75,7 @@ Formato obrigatório:
 }
 """;
 
-        var content = await CallOpenAiChatAsync(
-            systemPrompt,
-            prompt,
-            forceJson: true,
-            cancellationToken);
+        var content = await CallChatModelAsync(systemPrompt, prompt, forceJson: true, cancellationToken);
 
         try
         {
@@ -118,15 +116,15 @@ Formato obrigatório:
         }
         catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
         {
-            _logger.LogWarning(ex, "OpenAI returned an invalid tool plan: {Content}", content);
-            throw new InvalidOperationException("Não foi possível interpretar o plano de ferramenta retornado pela OpenAI.", ex);
+            _logger.LogWarning(ex, "Chat model returned an invalid tool plan: {Content}", content);
+            throw new InvalidOperationException("Não foi possível interpretar o plano de ferramenta retornado pelo modelo.", ex);
         }
     }
 
     private async Task<JsonDocument> ExecuteCamaraToolAsync(ToolPlan plan, CancellationToken cancellationToken)
     {
         var (path, query) = BuildCamaraRequest(plan);
-        var baseUrl = GetConfigurationValue("CAMARA_API_BASE_URL") ?? DefaultCamaraBaseUrl;
+        var baseUrl = GetConfigurationValue("CAMARA_API_BASE_URL", "CamaraApi:BaseUrl") ?? DefaultCamaraBaseUrl;
         var requestUri = BuildUri(baseUrl, path, query);
 
         using var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
@@ -203,7 +201,23 @@ JSON retornado pela API da Câmara:
 {dataJson}
 """;
 
-        return await CallOpenAiChatAsync(systemPrompt, userContent, forceJson: false, cancellationToken);
+        return await CallChatModelAsync(systemPrompt, userContent, forceJson: false, cancellationToken);
+    }
+
+    private Task<string> CallChatModelAsync(
+        string systemPrompt,
+        string userPrompt,
+        bool forceJson,
+        CancellationToken cancellationToken)
+    {
+        var provider = GetChatProvider();
+
+        return provider switch
+        {
+            "openai" => CallOpenAiChatAsync(systemPrompt, userPrompt, forceJson, cancellationToken),
+            "ollama" => CallOllamaChatAsync(systemPrompt, userPrompt, forceJson, cancellationToken),
+            _ => throw new InvalidOperationException($"Provedor de chat inválido: '{provider}'. Use 'openai' ou 'ollama'.")
+        };
     }
 
     private async Task<string> CallOpenAiChatAsync(
@@ -212,13 +226,13 @@ JSON retornado pela API da Câmara:
         bool forceJson,
         CancellationToken cancellationToken)
     {
-        var apiKey = GetConfigurationValue("OPENAI_API_KEY");
+        var apiKey = GetConfigurationValue("OPENAI_API_KEY", "Chat:OpenAI:ApiKey");
         if (string.IsNullOrWhiteSpace(apiKey))
         {
-            throw new InvalidOperationException("Configure a variável de ambiente OPENAI_API_KEY antes de usar o chat com LLM.");
+            throw new InvalidOperationException("Configure OPENAI_API_KEY ou Chat:OpenAI:ApiKey antes de usar o provedor OpenAI.");
         }
 
-        var model = GetConfigurationValue("OPENAI_MODEL") ?? DefaultOpenAiModel;
+        var model = GetConfigurationValue("OPENAI_MODEL", "Chat:OpenAI:Model") ?? DefaultOpenAiModel;
 
         var payload = new Dictionary<string, object?>
         {
@@ -263,9 +277,87 @@ JSON retornado pela API da Câmara:
         return content;
     }
 
-    private string? GetConfigurationValue(string key)
+    private async Task<string> CallOllamaChatAsync(
+        string systemPrompt,
+        string userPrompt,
+        bool forceJson,
+        CancellationToken cancellationToken)
     {
-        return _configuration[key] ?? Environment.GetEnvironmentVariable(key);
+        var baseUrl = GetConfigurationValue("OLLAMA_BASE_URL", "Chat:Ollama:BaseUrl") ?? DefaultOllamaBaseUrl;
+        var model = GetConfigurationValue("OLLAMA_MODEL", "Chat:Ollama:Model") ?? DefaultOllamaModel;
+        var endpoint = BuildOllamaEndpoint(baseUrl);
+
+        var payload = new Dictionary<string, object?>
+        {
+            ["model"] = model,
+            ["stream"] = false,
+            ["messages"] = new object[]
+            {
+                new { role = "system", content = systemPrompt },
+                new { role = "user", content = userPrompt }
+            }
+        };
+
+        if (forceJson)
+        {
+            payload["format"] = "json";
+        }
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
+        request.Content = new StringContent(JsonSerializer.Serialize(payload, _jsonOptions), Encoding.UTF8, "application/json");
+
+        var httpClient = _httpClientFactory.CreateClient();
+        using var response = await httpClient.SendAsync(request, cancellationToken);
+        var responseText = await response.Content.ReadAsStringAsync(cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException($"Erro HTTP {(int)response.StatusCode} ao chamar o Ollama: {responseText}");
+        }
+
+        using var json = JsonDocument.Parse(responseText);
+        var root = json.RootElement;
+        string? content = null;
+
+        if (root.TryGetProperty("message", out var messageElement)
+            && messageElement.ValueKind == JsonValueKind.Object
+            && messageElement.TryGetProperty("content", out var contentElement))
+        {
+            content = contentElement.GetString();
+        }
+        else if (root.TryGetProperty("response", out var responseElement))
+        {
+            content = responseElement.GetString();
+        }
+
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            throw new InvalidOperationException("O Ollama retornou uma resposta vazia.");
+        }
+
+        return content;
+    }
+
+    private string GetChatProvider()
+    {
+        return (GetConfigurationValue("CHAT_PROVIDER", "Chat:Provider") ?? "openai")
+            .Trim()
+            .ToLowerInvariant();
+    }
+
+    private string? GetConfigurationValue(string environmentKey, string configurationKey)
+    {
+        return Environment.GetEnvironmentVariable(environmentKey) ?? _configuration[configurationKey];
+    }
+
+    private static Uri BuildOllamaEndpoint(string baseUrl)
+    {
+        if (!baseUrl.EndsWith('/'))
+        {
+            baseUrl += "/";
+        }
+
+        return new Uri(new Uri(baseUrl), "api/chat");
     }
 
     private static Uri BuildUri(string baseUrl, string relativePath, IReadOnlyDictionary<string, string?> query)
