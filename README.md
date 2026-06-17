@@ -20,6 +20,7 @@ https://dadosabertos.camara.leg.br/swagger/api.html
 - ASP.NET Core Minimal API
 - MCP C# SDK (`ModelContextProtocol`)
 - Transporte MCP via Streamable HTTP
+- Backend de chat com OpenAI
 - API REST da Câmara dos Deputados
 - Cache local SQLite para respostas da API da Câmara
 
@@ -27,7 +28,8 @@ https://dadosabertos.camara.leg.br/swagger/api.html
 
 | Endpoint | Descrição |
 | --- | --- |
-| `/` | Página HTML simples para testar o MCP pelo navegador. |
+| `/` | Página HTML de chat para prompts em linguagem natural. |
+| `/api/chat` | Backend HTTP usado pela página de chat. Chama OpenAI e consulta a API da Câmara. |
 | `/mcp` | Endpoint MCP via Streamable HTTP. |
 | `/health` | Health check simples do servidor. |
 
@@ -72,18 +74,30 @@ Exemplo:
 
 ## Como rodar
 
+Configure a chave da OpenAI antes de usar o chat da página `/`:
+
+### Linux/macOS
+
 ```bash
-dotnet restore
-dotnet run --project McpBrazilPoliticians.csproj
+export OPENAI_API_KEY="sua-chave"
+export OPENAI_MODEL="gpt-4.1-mini"
 ```
 
-Por padrão, o ASP.NET Core sobe nos endereços configurados pelo ambiente. Para fixar uma porta local:
+### PowerShell
+
+```powershell
+$env:OPENAI_API_KEY="sua-chave"
+$env:OPENAI_MODEL="gpt-4.1-mini"
+```
+
+Depois rode:
 
 ```bash
+dotnet restore
 dotnet run --project McpBrazilPoliticians.csproj --urls http://localhost:5000
 ```
 
-Depois acesse:
+Acesse:
 
 ```text
 http://localhost:5000/
@@ -95,17 +109,31 @@ O endpoint MCP fica em:
 http://localhost:5000/mcp
 ```
 
-## Usando a página HTML
+O backend de chat fica em:
 
-A página inicial permite:
+```text
+http://localhost:5000/api/chat
+```
 
-1. Inicializar a sessão MCP.
-2. Listar ferramentas disponíveis com `tools/list`.
-3. Selecionar uma ferramenta.
-4. Enviar argumentos JSON.
-5. Executar a ferramenta com `tools/call`.
+## Usando a página de chat
 
-O campo de endpoint vem preenchido com `/mcp`, que funciona quando a página é servida pelo próprio servidor.
+A página inicial envia o prompt para `/api/chat`.
+
+Fluxo do backend:
+
+1. Recebe o prompt do usuário.
+2. Usa OpenAI para escolher a consulta adequada.
+3. Consulta a API de Dados Abertos da Câmara.
+4. Usa OpenAI novamente para transformar o JSON retornado em uma resposta em português.
+5. Retorna a resposta, a ferramenta lógica usada, os argumentos e os dados brutos.
+
+Exemplos de prompt:
+
+- "Busque deputados do RS do PT."
+- "Mostre detalhes do deputado com id 220593."
+- "Procure proposições sobre escala 6x1."
+- "Procure PLs de 2026 com ementa sobre inteligência artificial."
+- "Liste eventos da Câmara entre 2026-06-01 e 2026-06-16."
 
 ## Configuração em clientes MCP HTTP
 
@@ -125,6 +153,8 @@ O cliente da Câmara pode ser configurado por variáveis de ambiente:
 CAMARA_API_BASE_URL=https://dadosabertos.camara.leg.br/api/v2/
 CAMARA_API_TIMEOUT_SECONDS=30
 CAMARA_API_CACHE_SQLITE_PATH=/caminho/para/camara-api-cache.sqlite
+OPENAI_API_KEY=sua-chave
+OPENAI_MODEL=gpt-4.1-mini
 ```
 
 Quando `CAMARA_API_CACHE_SQLITE_PATH` não é definido, o cache é salvo em:
@@ -146,14 +176,6 @@ Fluxo:
 5. Se a resposta HTTP for 2xx, formata o JSON e salva no SQLite por 1 hora.
 6. Respostas de erro não são cacheadas.
 
-## Exemplos de prompts em um cliente MCP
-
-- "Busque deputados do RS do PT."
-- "Mostre detalhes do deputado com id 220593."
-- "Liste despesas de um deputado em 2026."
-- "Procure PLs de 2026 com ementa sobre inteligência artificial."
-- "Liste eventos da Câmara entre 2026-06-01 e 2026-06-16."
-
 ## Segurança e limites
 
 - O fallback `CamaraApiGetAsync` aceita apenas caminhos relativos.
@@ -161,3 +183,4 @@ Fluxo:
 - `..` no path é bloqueado para evitar path traversal.
 - Recomenda-se limitar `itens` em chamadas feitas por LLMs para evitar respostas muito grandes.
 - A política de CORS atual é permissiva para facilitar testes locais. Restrinja as origens antes de expor em rede pública.
+- Não exponha `OPENAI_API_KEY` no frontend. A chave fica somente no backend.
