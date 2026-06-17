@@ -54,7 +54,8 @@ public sealed class ChatResponseFormatterService
             "search_deputados" => FormatDeputados(dados, arguments),
             "search_proposicoes" => FormatProposicoes(dados, arguments),
             "get_deputado_despesas" => FormatDespesas(dados, arguments),
-            "get_deputado_votacoes" => FormatVotacoes(dados, arguments),
+            "search_votacoes" or "get_votacao" or "get_deputado_votacoes" or "get_evento_votacoes" or "get_orgao_votacoes" or "get_proposicao_votacoes" => FormatVotacoes(dados, arguments),
+            "get_votacao_votos" => FormatVotos(dados, arguments),
             "search_eventos" => FormatGenericList("Eventos encontrados", dados),
             "search_orgaos" => FormatGenericList("Órgãos encontrados", dados),
             _ => FormatGenericData(dados)
@@ -211,10 +212,10 @@ public sealed class ChatResponseFormatterService
             .EnumerateArray()
             .Select(item => new
             {
-                Data = GetString(item, "dataHoraRegistro") ?? GetString(item, "dataHora"),
+                Data = GetString(item, "dataHoraRegistro") ?? GetString(item, "dataHora") ?? GetString(item, "data"),
                 Voto = GetString(item, "voto") ?? GetString(item, "tipoVoto"),
-                Descricao = GetString(item, "descricao") ?? GetString(item, "titulo"),
-                SiglaOrgao = GetString(item, "siglaOrgao"),
+                Descricao = GetString(item, "descricao") ?? GetString(item, "titulo") ?? GetNestedString(item, "proposicaoObjeto", "ementa"),
+                SiglaOrgao = GetString(item, "siglaOrgao") ?? GetNestedString(item, "orgao", "sigla"),
                 IdVotacao = GetString(item, "id") ?? GetString(item, "idVotacao")
             })
             .ToList();
@@ -225,18 +226,57 @@ public sealed class ChatResponseFormatterService
         if (TryGetArgument(arguments, "idDeputado", out var idDeputado)) builder.Append(" — ID ").Append(idDeputado);
         builder.AppendLine();
         builder.AppendLine();
-        builder.AppendLine("| # | Data | Voto | Órgão | Proposição/Votação |");
+        builder.AppendLine("| # | Data | Voto | Órgão | ID/Descrição |");
         builder.AppendLine("|---:|---|---|---|---|");
 
         for (var i = 0; i < items.Count; i++)
         {
             var item = items[i];
+            var description = !string.IsNullOrWhiteSpace(item.Descricao)
+                ? item.Descricao
+                : item.IdVotacao;
+
             builder
                 .Append("| ").Append(i + 1)
                 .Append(" | ").Append(EscapeMarkdownTable(FormatDate(item.Data ?? string.Empty)))
-                .Append(" | ").Append(EscapeMarkdownTable(item.Voto ?? "não informado"))
+                .Append(" | ").Append(EscapeMarkdownTable(item.Voto ?? string.Empty))
                 .Append(" | ").Append(EscapeMarkdownTable(item.SiglaOrgao ?? string.Empty))
-                .Append(" | ").Append(EscapeMarkdownTable(SingleLine(item.Descricao ?? item.IdVotacao ?? string.Empty)))
+                .Append(" | ").Append(EscapeMarkdownTable(SingleLine(description ?? string.Empty)))
+                .AppendLine(" |");
+        }
+
+        return builder.ToString().Trim();
+    }
+
+    private static string FormatVotos(JsonElement dados, IReadOnlyDictionary<string, object?>? arguments)
+    {
+        if (dados.ValueKind != JsonValueKind.Array || dados.GetArrayLength() == 0)
+        {
+            return "Não encontrei votos com os filtros usados.";
+        }
+
+        var builder = new StringBuilder();
+        builder.Append("Votos encontrados");
+        if (TryGetArgument(arguments, "idVotacao", out var idVotacao)) builder.Append(" — votação ").Append(idVotacao);
+        builder.AppendLine();
+        builder.AppendLine();
+        builder.AppendLine("| # | Parlamentar | Partido/UF | Voto |");
+        builder.AppendLine("|---:|---|---|---|");
+
+        var index = 1;
+        foreach (var item in dados.EnumerateArray())
+        {
+            var deputado = GetNestedString(item, "deputado_", "nome") ?? GetNestedString(item, "deputado", "nome") ?? GetString(item, "nome");
+            var partido = GetNestedString(item, "deputado_", "siglaPartido") ?? GetNestedString(item, "deputado", "siglaPartido") ?? GetString(item, "siglaPartido");
+            var uf = GetNestedString(item, "deputado_", "siglaUf") ?? GetNestedString(item, "deputado", "siglaUf") ?? GetString(item, "siglaUf");
+            var voto = GetString(item, "voto") ?? GetString(item, "tipoVoto");
+            var partidoUf = string.Join("/", new[] { partido, uf }.Where(value => !string.IsNullOrWhiteSpace(value)));
+
+            builder
+                .Append("| ").Append(index++)
+                .Append(" | ").Append(EscapeMarkdownTable(deputado ?? string.Empty))
+                .Append(" | ").Append(EscapeMarkdownTable(partidoUf))
+                .Append(" | ").Append(EscapeMarkdownTable(voto ?? string.Empty))
                 .AppendLine(" |");
         }
 
@@ -387,6 +427,13 @@ public sealed class ChatResponseFormatterService
         };
     }
 
+    private static string? GetNestedString(JsonElement item, string objectName, string propertyName)
+    {
+        return item.TryGetProperty(objectName, out var nested) && nested.ValueKind == JsonValueKind.Object
+            ? GetString(nested, propertyName)
+            : null;
+    }
+
     private static string JsonValueToText(JsonElement value)
     {
         return value.ValueKind switch
@@ -420,7 +467,7 @@ public sealed class ChatResponseFormatterService
     private static string FormatDate(string value)
     {
         return DateTimeOffset.TryParse(value, out var date)
-            ? date.ToString("dd/MM/yyyy")
+            ? date.ToString("dd/MM/yyyy HH:mm")
             : value;
     }
 
