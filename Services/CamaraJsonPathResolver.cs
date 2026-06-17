@@ -39,9 +39,14 @@ public sealed class CamaraJsonPathResolver
                 }
 
                 var index = int.Parse(match.Groups["index"].Value);
+                if (current.GetArrayLength() == 0)
+                {
+                    throw new InvalidOperationException($"A lista '{propertyName}' está vazia. A etapa anterior não retornou resultados.");
+                }
+
                 if (index < 0 || index >= current.GetArrayLength())
                 {
-                    throw new InvalidOperationException($"O índice {index} está fora dos limites da lista '{propertyName}'.");
+                    throw new InvalidOperationException($"O índice {index} está fora dos limites da lista '{propertyName}', que possui {current.GetArrayLength()} item(ns).");
                 }
 
                 current = current[index];
