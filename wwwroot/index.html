@@ -179,10 +179,10 @@
   <div class="app">
     <header>
       <h1>Chat MCP Brazil Politicians</h1>
-      <p>Faça perguntas sobre deputados, proposições, eventos e órgãos da Câmara.</p>
+      <p>Faça perguntas em linguagem natural. O backend usa OpenAI e consulta dados da Câmara.</p>
     </header>
 
-    <div id="status" class="status">Conectando ao MCP...</div>
+    <div id="status" class="status">Chat pronto.</div>
     <main id="messages" class="messages"></main>
 
     <form id="chatForm">
@@ -196,16 +196,15 @@
   </div>
 
   <script>
-    const endpoint = "/mcp";
-    let nextId = 1;
-    let initialized = false;
-    let availableTools = [];
+    const chatEndpoint = "/api/chat";
 
     const messagesEl = document.getElementById("messages");
     const statusEl = document.getElementById("status");
     const formEl = document.getElementById("chatForm");
     const promptEl = document.getElementById("prompt");
     const sendButtonEl = document.getElementById("sendButton");
+
+    addMessage("system", "Chat conectado ao backend com OpenAI. Configure OPENAI_API_KEY no servidor para habilitar as respostas.");
 
     formEl.addEventListener("submit", async event => {
       event.preventDefault();
@@ -224,48 +223,39 @@
       promptEl.style.height = Math.min(promptEl.scrollHeight, 160) + "px";
     });
 
-    start();
-
-    async function start() {
-      addMessage("system", "Chat simples conectado ao MCP. Ele identifica a intenção do prompt e chama a ferramenta MCP correspondente.");
-
-      try {
-        await initializeMcp();
-        await loadTools();
-        setStatus("MCP conectado. Ferramentas carregadas: " + availableTools.length + ".");
-      } catch (error) {
-        setStatus("Erro ao conectar no MCP.");
-        addMessage("assistant error", "Não consegui conectar ao MCP. Verifique se o servidor está rodando e se /mcp está ativo.\n\nErro: " + error.message);
-      }
-    }
-
     async function submitPrompt() {
       const prompt = promptEl.value.trim();
       if (!prompt) return;
 
       promptEl.value = "";
       promptEl.style.height = "auto";
-
       addMessage("user", prompt);
       setBusy(true);
 
       try {
-        if (!initialized) await initializeMcp();
-        if (availableTools.length === 0) await loadTools();
+        const response = await fetch(chatEndpoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+          },
+          body: JSON.stringify({ prompt })
+        });
 
-        const toolCall = buildToolCallFromPrompt(prompt);
-
-        if (!toolCall) {
-          const toolNames = availableTools.map(t => t.name).join(", ");
-          addMessage(
-            "assistant",
-            "Não consegui identificar qual ferramenta MCP usar para esse prompt.\n\nFerramentas carregadas:\n" + toolNames + "\n\nTente algo como:\n- Busque deputados do RS\n- Detalhes do deputado 220593\n- Despesas do deputado 220593 em 2024\n- Proposições sobre escala 6x1"
-          );
-          return;
+        const rawText = await response.text();
+        let payload;
+        try {
+          payload = rawText ? JSON.parse(rawText) : null;
+        } catch {
+          payload = { answer: rawText };
         }
 
-        const response = await callTool(toolCall.name, toolCall.arguments);
-        addToolResponseMessage(toolCall, response);
+        if (!response.ok) {
+          const message = payload?.detail || payload?.title || payload?.error || rawText || "Erro desconhecido.";
+          throw new Error(message);
+        }
+
+        addAssistantResponse(payload);
       } catch (error) {
         addMessage("assistant error", "Erro ao processar o prompt.\n\n" + error.message);
       } finally {
@@ -273,325 +263,41 @@
       }
     }
 
-    async function initializeMcp() {
-      const result = await sendJsonRpc("initialize", {
-        protocolVersion: "2025-06-18",
-        capabilities: {},
-        clientInfo: {
-          name: "mcp-brazil-politicians-chat-client",
-          version: "1.0.0"
-        }
-      });
+    function addAssistantResponse(payload) {
+      const answer = payload?.answer || "Sem resposta.";
+      const details = JSON.stringify({
+        tool: payload?.tool,
+        arguments: payload?.arguments,
+        data: payload?.data
+      }, null, 2);
 
-      await sendJsonRpcNotification("notifications/initialized", {});
-      initialized = true;
-      return result;
-    }
+      const html = escapeHtml(answer) +
+        "<details><summary>Ver dados da consulta</summary><pre>" + escapeHtml(details) + "</pre></details>";
 
-    async function loadTools() {
-      const response = await sendJsonRpc("tools/list", {});
-      availableTools = response?.result?.tools || [];
-      return availableTools;
-    }
-
-    async function callTool(name, args) {
-      return sendJsonRpc("tools/call", { name, arguments: args || {} });
-    }
-
-    async function sendJsonRpc(method, params) {
-      const response = await sendPayload({ jsonrpc: "2.0", id: nextId++, method, params });
-      if (response?.error) throw new Error(response.error.message || JSON.stringify(response.error));
-      return response;
-    }
-
-    async function sendJsonRpcNotification(method, params) {
-      return sendPayload({ jsonrpc: "2.0", method, params });
-    }
-
-    async function sendPayload(payload) {
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Accept": "application/json, text/event-stream"
-        },
-        body: JSON.stringify(payload)
-      });
-
-      const rawText = await response.text();
-      if (!response.ok) throw new Error("HTTP " + response.status + ": " + rawText);
-      if (!rawText) return null;
-
-      const contentType = response.headers.get("content-type") || "";
-      if (contentType.includes("text/event-stream")) return parseServerSentEvents(rawText);
-
-      try { return JSON.parse(rawText); } catch { return rawText; }
-    }
-
-    function parseServerSentEvents(rawText) {
-      const dataLines = rawText
-        .split(/\r?\n/)
-        .filter(line => line.startsWith("data:"))
-        .map(line => line.substring(5).trim())
-        .filter(Boolean);
-
-      if (dataLines.length === 0) return rawText;
-      const lastData = dataLines[dataLines.length - 1];
-      try { return JSON.parse(lastData); } catch { return lastData; }
-    }
-
-    function buildToolCallFromPrompt(prompt) {
-      const text = normalize(prompt);
-      const raw = prompt.trim();
-      const deputyId = extractFirstNumber(text);
-      const year = extractYear(text);
-      const month = extractMonth(text);
-      const uf = extractUf(raw);
-      const party = extractParty(raw);
-
-      if (hasAny(text, ["despesa", "despesas", "gasto", "gastos"]) && deputyId) {
-        return toolCall(["deputado", "despesa"], { idDeputado: deputyId, ano: year, mes: month });
-      }
-
-      if (hasAny(text, ["historico", "histórico", "partidos", "partido"]) && deputyId) {
-        return toolCall(["deputado", "historico", "partido"], { idDeputado: deputyId });
-      }
-
-      if (hasAny(text, ["evento", "eventos", "agenda"]) && deputyId && hasAny(text, ["deputado", "deputada"])) {
-        return toolCall(["deputado", "evento"], { idDeputado: deputyId });
-      }
-
-      if (deputyId && hasAny(text, ["detalhe", "detalhes", "dados", "perfil", "deputado", "deputada"])) {
-        return toolCall(["deputado"], { idDeputado: deputyId }, ["search", "busca", "list"]);
-      }
-
-      if (hasAny(text, ["proposicao", "proposicoes", "proposições", "projeto", "pl", "pec", "escala", "6x1", "lei"])) {
-        return toolCall(["proposicao"], {
-          ano: year,
-          ementa: cleanupSearchText(raw),
-          pagina: 1,
-          itens: 10
-        }, ["get", "detalhe", "autor", "tramitacao", "relacionada"]);
-      }
-
-      if (hasAny(text, ["evento", "eventos", "audiencia", "audiência", "reuniao", "reunião"])) {
-        return toolCall(["evento"], { descricao: cleanupSearchText(raw), pagina: 1, itens: 10 }, ["get", "detalhe"]);
-      }
-
-      if (hasAny(text, ["orgao", "órgão", "orgaos", "órgãos", "comissao", "comissão", "comissoes", "comissões"])) {
-        return toolCall(["orgao"], { nome: cleanupSearchText(raw), pagina: 1, itens: 10 }, ["get", "detalhe", "membro"]);
-      }
-
-      if (hasAny(text, ["deputado", "deputada", "deputados", "deputadas", "parlamentar", "parlamentares"])) {
-        return toolCall(["deputado"], {
-          nome: extractLikelyName(raw),
-          siglaUf: uf,
-          siglaPartido: party,
-          pagina: 1,
-          itens: 10
-        }, ["get", "detalhe", "despesa", "evento", "historico"]);
-      }
-
-      return null;
-    }
-
-    function toolCall(requiredTerms, args, excludedTerms) {
-      const tool = findTool(requiredTerms, excludedTerms || []);
-      if (!tool) return null;
-      return { name: tool.name, arguments: filterArgsForTool(tool, removeNullValues(args)) };
-    }
-
-    function findTool(requiredTerms, excludedTerms) {
-      const required = requiredTerms.map(normalizeToken);
-      const excluded = excludedTerms.map(normalizeToken);
-
-      const scored = availableTools
-        .map(tool => {
-          const name = normalizeToken(tool.name);
-          const description = normalizeToken(tool.description || "");
-          const haystack = name + " " + description;
-
-          const hasRequired = required.every(term => haystack.includes(term));
-          if (!hasRequired) return null;
-
-          const hasExcluded = excluded.some(term => name.includes(term));
-          if (hasExcluded) return null;
-
-          let score = 0;
-          for (const term of required) {
-            if (name.includes(term)) score += 10;
-            if (description.includes(term)) score += 2;
-          }
-          if (name.includes("search") || name.includes("busca") || name.includes("listar") || name.includes("list")) score += 6;
-          if (name.includes("async")) score -= 1;
-
-          return { tool, score };
-        })
-        .filter(Boolean)
-        .sort((a, b) => b.score - a.score);
-
-      return scored[0]?.tool || null;
-    }
-
-    function filterArgsForTool(tool, args) {
-      const properties = tool?.inputSchema?.properties;
-      if (!properties) return args;
-
-      const result = {};
-      for (const [key, value] of Object.entries(args)) {
-        if (Object.prototype.hasOwnProperty.call(properties, key)) {
-          result[key] = value;
-          continue;
-        }
-
-        const matchingKey = Object.keys(properties).find(propertyKey => normalizeToken(propertyKey) === normalizeToken(key));
-        if (matchingKey) result[matchingKey] = value;
-      }
-
-      return result;
-    }
-
-    function removeNullValues(value) {
-      const result = {};
-      for (const [key, item] of Object.entries(value || {})) {
-        if (item !== null && item !== undefined && item !== "") result[key] = item;
-      }
-      return result;
-    }
-
-    function addToolResponseMessage(toolCall, response) {
-      const content = extractReadableContent(response);
-      const details = JSON.stringify({ tool: toolCall, response }, null, 2);
-      const html = escapeHtml(content) + "<details><summary>Ver chamada MCP</summary><pre>" + escapeHtml(details) + "</pre></details>";
       addMessageHtml("assistant", html);
     }
 
-    function extractReadableContent(response) {
-      const content = response?.result?.content;
-
-      if (Array.isArray(content)) {
-        const textItems = content.map(item => item?.text || item?.content || "").filter(Boolean);
-        if (textItems.length > 0) return textItems.join("\n\n");
-      }
-
-      if (response?.result?.structuredContent) return JSON.stringify(response.result.structuredContent, null, 2);
-      if (response?.result) return JSON.stringify(response.result, null, 2);
-      return JSON.stringify(response, null, 2);
+    function addMessage(type, text) {
+      addMessageHtml(type, escapeHtml(text));
     }
-
-    function addMessage(type, text) { addMessageHtml(type, escapeHtml(text)); }
 
     function addMessageHtml(type, html) {
       const row = document.createElement("div");
       row.className = "message-row " + type;
+
       const bubble = document.createElement("div");
       bubble.className = "bubble";
       bubble.innerHTML = html;
+
       row.appendChild(bubble);
       messagesEl.appendChild(row);
       messagesEl.scrollTop = messagesEl.scrollHeight;
     }
 
-    function setStatus(message) { statusEl.textContent = message; }
-
     function setBusy(isBusy) {
       sendButtonEl.disabled = isBusy;
       promptEl.disabled = isBusy;
-      setStatus(isBusy ? "Consultando MCP..." : "MCP conectado. Ferramentas carregadas: " + availableTools.length + ".");
-    }
-
-    function normalize(value) {
-      return String(value || "")
-        .toLowerCase()
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "");
-    }
-
-    function normalizeToken(value) {
-      return normalize(value).replace(/[^a-z0-9]/g, "");
-    }
-
-    function hasAny(text, words) {
-      return words.some(word => text.includes(normalize(word)));
-    }
-
-    function extractFirstNumber(text) {
-      const match = text.match(/\b\d{3,}\b/);
-      return match ? Number(match[0]) : null;
-    }
-
-    function extractYear(text) {
-      const match = text.match(/\b(19|20)\d{2}\b/);
-      return match ? Number(match[0]) : null;
-    }
-
-    function extractMonth(text) {
-      const monthNames = {
-        janeiro: 1, fevereiro: 2, marco: 3, março: 3, abril: 4,
-        maio: 5, junho: 6, julho: 7, agosto: 8, setembro: 9,
-        outubro: 10, novembro: 11, dezembro: 12
-      };
-
-      for (const [name, value] of Object.entries(monthNames)) {
-        if (text.includes(normalize(name))) return value;
-      }
-
-      const match = text.match(/\bmes\s+(\d{1,2})\b|\bmês\s+(\d{1,2})\b/);
-      const value = match ? Number(match[1] || match[2]) : null;
-      return value >= 1 && value <= 12 ? value : null;
-    }
-
-    function extractUf(text) {
-      const ufs = ["AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO"];
-      const upper = text.toUpperCase();
-
-      for (const uf of ufs) {
-        if (new RegExp("\\b" + uf + "\\b", "i").test(upper)) return uf;
-      }
-
-      const normalized = normalize(text);
-      const states = {
-        "rio grande do sul": "RS", "sao paulo": "SP", "rio de janeiro": "RJ",
-        "minas gerais": "MG", "parana": "PR", "santa catarina": "SC",
-        "bahia": "BA", "ceara": "CE", "pernambuco": "PE", "goias": "GO",
-        "distrito federal": "DF"
-      };
-
-      for (const [name, uf] of Object.entries(states)) {
-        if (normalized.includes(normalize(name))) return uf;
-      }
-
-      return null;
-    }
-
-    function extractParty(text) {
-      const parties = ["PT", "PL", "MDB", "PSD", "PP", "PSB", "PSDB", "PDT", "REPUBLICANOS", "UNIÃO", "UNIAO", "NOVO", "PV", "PCDOB", "PSOL", "REDE", "AVANTE", "SOLIDARIEDADE", "PODE", "PRD"];
-      const upper = text.toUpperCase();
-
-      for (const party of parties) {
-        const escaped = party.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        if (new RegExp("\\b" + escaped + "\\b", "i").test(upper)) return party === "UNIAO" ? "UNIÃO" : party;
-      }
-
-      return null;
-    }
-
-    function extractLikelyName(prompt) {
-      let text = prompt;
-      text = text.replace(/busque|buscar|procure|procurar|liste|listar|mostre|mostrar/gi, "");
-      text = text.replace(/deputados|deputadas|deputado|deputada|parlamentares|parlamentar/gi, "");
-      text = text.replace(/\b(AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO)\b/gi, "");
-      text = text.replace(/\b(PT|PL|MDB|PSD|PP|PSB|PSDB|PDT|REPUBLICANOS|UNIÃO|UNIAO|NOVO|PV|PCDOB|PSOL|REDE|AVANTE|SOLIDARIEDADE|PODE|PRD)\b/gi, "");
-      text = text.trim();
-      if (!text || text.length < 3) return null;
-      return text;
-    }
-
-    function cleanupSearchText(prompt) {
-      return prompt
-        .replace(/busque|buscar|procure|procurar|liste|listar|mostre|mostrar/gi, "")
-        .replace(/proposições|proposicoes|proposicao|proposição|projetos|projeto|sobre/gi, "")
-        .trim();
+      statusEl.textContent = isBusy ? "Consultando OpenAI e Câmara..." : "Chat pronto.";
     }
 
     function escapeHtml(value) {
