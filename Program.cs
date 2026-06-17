@@ -1,3 +1,5 @@
+using McpBrazilPoliticians.Models;
+using McpBrazilPoliticians.Services;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
@@ -16,6 +18,9 @@ builder.Services.AddCors(options =>
             .WithExposedHeaders("Mcp-Session-Id");
     });
 });
+
+builder.Services.AddHttpClient();
+builder.Services.AddScoped<OpenAiChatService>();
 
 builder.Services
     .AddMcpServer()
@@ -40,8 +45,30 @@ app.MapGet("/health", () => Results.Ok(new
     transport = "streamable-http",
     stateless = true,
     mcpEndpoint = "/mcp",
+    chatEndpoint = "/api/chat",
     clientPage = "/"
 }));
+
+app.MapPost("/api/chat", async (
+    ChatPromptRequest request,
+    OpenAiChatService chatService,
+    CancellationToken cancellationToken) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Prompt))
+    {
+        return Results.BadRequest(new { error = "O prompt é obrigatório." });
+    }
+
+    try
+    {
+        var response = await chatService.GetAnswerAsync(request.Prompt, cancellationToken);
+        return Results.Ok(response);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Problem(ex.Message, statusCode: StatusCodes.Status500InternalServerError);
+    }
+});
 
 app.MapMcp("/mcp");
 
