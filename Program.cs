@@ -62,6 +62,7 @@ try
 
     builder.Services.AddHttpClient();
     builder.Services.AddSingleton<PromptFileLogService>();
+    builder.Services.AddSingleton<ChatResponseFormatterService>();
     builder.Services.AddScoped<OpenAiChatService>();
 
     builder.Services
@@ -99,7 +100,8 @@ try
         chatEndpoint,
         clientPage = "/",
         chatProvider = GetStringSetting(configuration, "Chat:Provider", "CHAT_PROVIDER", "ollama"),
-        promptFileLogging = GetBoolSetting(configuration, "Logging:PromptFile:Enabled", "LOG_PROMPT_FILE_ENABLED", defaultValue: true)
+        promptFileLogging = GetBoolSetting(configuration, "Logging:PromptFile:Enabled", "LOG_PROMPT_FILE_ENABLED", defaultValue: true),
+        plainTextAnswerFormatting = true
     }));
 
     app.MapGet("/api/client-settings", () => Results.Ok(new
@@ -112,6 +114,7 @@ try
     app.MapPost(chatEndpoint, async (
         ChatPromptRequest request,
         OpenAiChatService chatService,
+        ChatResponseFormatterService responseFormatter,
         ILogger<Program> logger,
         CancellationToken cancellationToken) =>
     {
@@ -126,8 +129,9 @@ try
         try
         {
             var response = await chatService.GetAnswerAsync(request.Prompt, cancellationToken);
-            logger.LogInformation("Chat endpoint completed. Tool={Tool}, PromptLogFile={PromptLogFile}", response.Tool, response.LogFilePath);
-            return Results.Ok(response);
+            var formattedResponse = responseFormatter.Format(response);
+            logger.LogInformation("Chat endpoint completed. Tool={Tool}, PromptLogFile={PromptLogFile}", formattedResponse.Tool, formattedResponse.LogFilePath);
+            return Results.Ok(formattedResponse);
         }
         catch (InvalidOperationException ex)
         {
