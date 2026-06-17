@@ -66,6 +66,7 @@ try
         .AddHttpMessageHandler<ProviderPromptLoggingHandler>();
     builder.Services.AddSingleton<PromptFileLogService>();
     builder.Services.AddSingleton<ChatResponseFormatterService>();
+    builder.Services.AddScoped<DirectChatQueryService>();
     builder.Services.AddScoped<OpenAiChatService>();
 
     builder.Services
@@ -117,6 +118,7 @@ try
     app.MapPost(chatEndpoint, async (
         ChatPromptRequest request,
         OpenAiChatService chatService,
+        DirectChatQueryService directQueryService,
         ChatResponseFormatterService responseFormatter,
         ILogger<Program> logger,
         CancellationToken cancellationToken) =>
@@ -138,6 +140,18 @@ try
 
         try
         {
+            var directResponse = await directQueryService.TryHandleAsync(request.Prompt, cancellationToken);
+            if (directResponse is not null)
+            {
+                var formattedDirectResponse = responseFormatter.Format(directResponse);
+                logger.LogInformation(
+                    "Chat endpoint completed with direct handler. Tool={Tool}, Arguments={Arguments}",
+                    formattedDirectResponse.Tool,
+                    formattedDirectResponse.Arguments);
+
+                return Results.Ok(formattedDirectResponse);
+            }
+
             var response = await chatService.GetAnswerAsync(request.Prompt, cancellationToken);
             var formattedResponse = responseFormatter.Format(response);
             logger.LogInformation("Chat endpoint completed. Tool={Tool}, PromptLogFile={PromptLogFile}", formattedResponse.Tool, formattedResponse.LogFilePath);
